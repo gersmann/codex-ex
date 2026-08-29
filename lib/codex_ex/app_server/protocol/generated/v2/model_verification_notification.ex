@@ -1,0 +1,23 @@
+defmodule CodexEx.AppServer.Protocol.Generated.V2.ModelVerificationNotification do
+  @moduledoc false
+
+  alias CodexEx.AppServer.Protocol.Codec
+
+  defstruct [:thread_id, :turn_id, :verifications]
+
+  @field_specs [
+    %{spec: :plain, field: :thread_id, required: true, wire_key: "threadId"},
+    %{spec: :plain, field: :turn_id, required: true, wire_key: "turnId"},
+    %{spec: {:array, :plain}, field: :verifications, required: true, wire_key: "verifications"}
+  ]
+
+  def decode(payload) when is_map(payload) do
+    Codec.decode_object(__MODULE__, @field_specs, payload)
+  end
+
+  def decode(other), do: other
+
+  def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+  def encode(other), do: Codec.encode_value(:plain, other)
+end

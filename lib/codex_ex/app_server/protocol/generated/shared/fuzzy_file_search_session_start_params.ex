@@ -1,0 +1,22 @@
+defmodule CodexEx.AppServer.Protocol.Generated.Shared.FuzzyFileSearchSessionStartParams do
+  @moduledoc false
+
+  alias CodexEx.AppServer.Protocol.Codec
+
+  defstruct [:roots, :session_id]
+
+  @field_specs [
+    %{spec: {:array, :plain}, field: :roots, required: true, wire_key: "roots"},
+    %{spec: :plain, field: :session_id, required: true, wire_key: "sessionId"}
+  ]
+
+  def decode(payload) when is_map(payload) do
+    Codec.decode_object(__MODULE__, @field_specs, payload)
+  end
+
+  def decode(other), do: other
+
+  def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+  def encode(other), do: Codec.encode_value(:plain, other)
+end
