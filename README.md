@@ -4,6 +4,91 @@ Elixir client for the Codex app-server JSON-RPC 2.0 protocol. Owns the client
 GenServer, session framing, transport abstraction, turn streaming, client
 pooling, and a fully code-generated protocol binding.
 
+## Installation
+
+```elixir
+def deps do
+  [
+    {:codex_ex, "~> 0.1"}
+  ]
+end
+```
+
+Requires a `codex` executable on `$PATH` for the default stdio transport
+(or pass `executable:` / use the websocket transport).
+
+## Usage
+
+Get a pooled client and run a turn to completion:
+
+```elixir
+alias CodexEx.AppServer.{Client, ClientManager, Thread}
+
+# Pooled: callers with the same connection options share one client
+# (and one underlying `codex app-server` OS process).
+{:ok, client} = ClientManager.get_client(transport: :stdio)
+
+# Start a thread and run a prompt, returning the final assistant text.
+{:ok, thread} = Client.start_thread(client, %{"cwd" => "/path/to/workspace"})
+{:ok, answer} = Thread.run_text(thread, "Summarize the TODOs in this repo.")
+```
+
+`Thread.run/3` starts the turn and returns a live `TurnStream`; wait on it to
+get the collected result — items, text deltas, token usage, and the final turn:
+
+```elixir
+alias CodexEx.AppServer.TurnStream
+
+{:ok, stream} = Thread.run(thread, [%{"type" => "text", "text" => "Refactor foo/1"}])
+{:ok, stream} = TurnStream.wait(stream)
+stream.final_text
+stream.items
+stream.usage
+```
+
+For structured output, pass a JSON schema:
+
+```elixir
+{:ok, %{"languages" => _}} =
+  Thread.run_json(thread, "List the languages used in this repo.", %{
+    "type" => "object",
+    "properties" => %{"languages" => %{"type" => "array", "items" => %{"type" => "string"}}},
+    "required" => ["languages"]
+  })
+```
+
+To observe streamed events (deltas, item updates, token usage) while a turn
+runs, subscribe before starting it — every parsed server event arrives as
+`{:codex_app_server_event, message}`:
+
+```elixir
+:ok = Client.subscribe(client)
+
+{:ok, _stream} = Thread.run(thread, [%{"type" => "text", "text" => "Go"}])
+
+receive do
+  {:codex_app_server_event, message} ->
+    CodexEx.AppServer.Message.extract_text_delta(message)
+end
+```
+
+Server-initiated requests (tool approvals, user-input elicitation) are answered
+by a `request_handler:` function passed to `Client.start_link/1` — note that
+pooled clients from `ClientManager` don't accept one, so use a dedicated
+client for approval flows:
+
+```elixir
+{:ok, client} =
+  Client.start_link(
+    transport: :stdio,
+    request_handler: fn _request -> %{"decision" => "approved"} end
+  )
+```
+
+Resume an existing thread by id with `Client.resume_thread(client, thread_id)`;
+fork, archive, goals, model/skill listing, and fuzzy file search are all on
+`Client`/`Thread` — see the module reference below.
+
 ## Host integration
 
 The package runs its own supervision tree (`CodexEx.Application`): a
