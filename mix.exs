@@ -11,6 +11,7 @@ defmodule CodexEx.MixProject do
       deps: deps(),
       description: "Elixir client for the Codex app-server JSON-RPC protocol",
       source_url: "https://github.com/gersmann/codex-ex",
+      docs: [main: "readme", extras: ["README.md"]],
       package: package()
     ]
   end
@@ -31,6 +32,7 @@ defmodule CodexEx.MixProject do
       {:mint_web_socket, "~> 1.0"},
       {:phoenix_pubsub, "~> 2.1"},
       {:styler, "~> 1.11", only: [:dev, :test], runtime: false},
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:bandit, "~> 1.5", only: :test},
       {:websock_adapter, "~> 0.5", only: :test}
     ]
@@ -39,7 +41,8 @@ defmodule CodexEx.MixProject do
   defp package do
     [
       licenses: ["MIT"],
-      files: ~w(lib priv mix.exs README.md .formatter.exs)
+      links: %{"GitHub" => "https://github.com/gersmann/codex-ex"},
+      files: ~w(lib priv mix.exs README.md LICENSE .formatter.exs)
     ]
   end
 end
