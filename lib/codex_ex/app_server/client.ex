@@ -1411,6 +1411,7 @@ defmodule CodexEx.AppServer.Client do
     params =
       params
       |> MapHelpers.deep_stringify_keys()
+      |> Map.put("threadSource", "appServer")
       |> Map.put("developerInstructions", settings_seed.developer_instructions)
       |> Map.put_new("historyMode", "paginated")
       |> enable_realtime()

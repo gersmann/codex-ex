@@ -183,11 +183,14 @@ defmodule CodexEx.AppServer.ClientTest do
   test "external root thread starts are published without observing app threads or subagents", %{
     mock: mock
   } do
+    MockTransport.configure(mock, notify: self())
+
     client =
       start_supervised!({Client, [transport: MockTransport, mock_pid: mock, broadcasts_thread_activity?: true]})
 
     assert :ok = Client.subscribe_thread_activity()
-    assert {:ok, thread} = Client.start_thread(client)
+    assert {:ok, thread} = Client.start_thread(client, %{"threadSource" => "user"})
+    assert_receive {:mock_thread_start, %{"threadSource" => "appServer"}}
     refute_receive {:codex_thread_discovered, {^client, _agent_id, _workspace_id}, _snapshot}, 50
 
     external_thread =
