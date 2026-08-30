@@ -369,8 +369,12 @@ defmodule CodexEx.AppServer.ClientManager do
          {:client, transport, runner_id, url, executable, args, workspace_id, workspace_root, initialize_params,
           strict_protocol, _proxy_only, _broadcasts_thread_activity}
        ) do
-    {:client, transport, runner_id, url, executable, args, workspace_id, workspace_root, initialize_params,
-     strict_protocol}
+    {:client, stable_transport_identity(transport), runner_id, url, executable, args, workspace_id, workspace_root,
+     initialize_params, strict_protocol}
+  end
+
+  defp stable_transport_identity(transport) do
+    if function_exported?(transport, :stable_identity, 0), do: transport.stable_identity(), else: transport
   end
 
   defp shared_client_key(opts) when is_list(opts) do
