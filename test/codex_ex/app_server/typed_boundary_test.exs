@@ -210,20 +210,20 @@ defmodule CodexEx.AppServer.TypedBoundaryTest do
         thread_id: "thread-1",
         turn_id: "turn-1",
         token_usage: %{
-          modelContextWindow: 200_000,
+          model_context_window: 200_000,
           last: %{
-            cachedInputTokens: 1,
-            inputTokens: 2,
-            outputTokens: 3,
-            reasoningOutputTokens: 4,
-            totalTokens: 10
+            cached_input_tokens: 1,
+            input_tokens: 2,
+            output_tokens: 3,
+            reasoning_output_tokens: 4,
+            total_tokens: 10
           },
           total: %{
-            cachedInputTokens: 5,
-            inputTokens: 6,
-            outputTokens: 7,
-            reasoningOutputTokens: 8,
-            totalTokens: 26
+            cached_input_tokens: 5,
+            input_tokens: 6,
+            output_tokens: 7,
+            reasoning_output_tokens: 8,
+            total_tokens: 26
           }
         }
       }
@@ -236,20 +236,20 @@ defmodule CodexEx.AppServer.TypedBoundaryTest do
         turn_id: "turn-1",
         token_usage: %{
           last: %{
-            cachedInputTokens: 1,
-            inputTokens: 2,
-            outputTokens: 3,
-            reasoningOutputTokens: 4,
-            totalTokens: 10
+            cached_input_tokens: 1,
+            input_tokens: 2,
+            output_tokens: 3,
+            reasoning_output_tokens: 4,
+            total_tokens: 10
           },
           total: %{
-            cachedInputTokens: 5,
-            inputTokens: 6,
-            outputTokens: 7,
-            reasoningOutputTokens: 8,
-            totalTokens: 26
+            cached_input_tokens: 5,
+            input_tokens: 6,
+            output_tokens: 7,
+            reasoning_output_tokens: 8,
+            total_tokens: 26
           },
-          modelContextWindow: "huge"
+          model_context_window: "huge"
         }
       }
     }

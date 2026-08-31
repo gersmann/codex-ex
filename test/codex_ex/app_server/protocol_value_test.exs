@@ -15,7 +15,7 @@ defmodule CodexEx.AppServer.ProtocolValueTest do
     assert {:ok, 3} = ProtocolValue.fetch(%{"threadId" => 3}, :thread_id)
   end
 
-  test "fetch reads existing camelCase atom keys without exception-driven lookup" do
-    assert {:ok, 4} = ProtocolValue.fetch(%{threadId: 4}, :thread_id)
+  test "fetch ignores unsupported camelCase atom keys" do
+    assert :error = ProtocolValue.fetch(%{threadId: 4}, :thread_id)
   end
 end

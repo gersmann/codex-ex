@@ -1144,7 +1144,7 @@ defmodule CodexEx.AppServer.Client do
   @impl true
   def handle_call({:thread_fork, params, settings_seed, timeout}, from, state) do
     client = self()
-    thread_id = ProtocolValue.get(params, :thread_id, nil, ["threadId"])
+    thread_id = ProtocolValue.get(params, :thread_id)
 
     :ok =
       defer_reply(from, state.session, fn session ->
@@ -1203,7 +1203,7 @@ defmodule CodexEx.AppServer.Client do
   @impl true
   def handle_call({:thread_rollback, params, timeout}, from, state) do
     client = self()
-    thread_id = ProtocolValue.get(params, :thread_id, nil, ["threadId"])
+    thread_id = ProtocolValue.get(params, :thread_id)
 
     :ok =
       defer_reply(from, state.session, fn session ->
@@ -1236,7 +1236,7 @@ defmodule CodexEx.AppServer.Client do
 
   @impl true
   def handle_call({:turn_start_request, params, timeout}, from, state) do
-    thread_id = ProtocolValue.get(params, :thread_id, nil, ["threadId"])
+    thread_id = ProtocolValue.get(params, :thread_id)
 
     defer_session_request(from, state, "turn/start", params, timeout, fn result ->
       normalize_turn_result(result, thread_id)
@@ -1245,7 +1245,7 @@ defmodule CodexEx.AppServer.Client do
 
   @impl true
   def handle_call({:review_start_request, params, timeout}, from, state) do
-    thread_id = ProtocolValue.get(params, :thread_id, nil, ["threadId"])
+    thread_id = ProtocolValue.get(params, :thread_id)
 
     defer_session_request(from, state, "review/start", params, timeout, fn result ->
       normalize_review_result(result, thread_id)

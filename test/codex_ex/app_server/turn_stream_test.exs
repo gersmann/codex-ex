@@ -377,12 +377,20 @@ defmodule CodexEx.AppServer.TurnStreamTest do
                end
              end)
 
-    assert_receive {:request_task, _task_pid}
+    assert_receive {:request_task, task_pid}
 
-    send(client, {:codex_app_server_replay_gap, %{"missing_through_sequence" => 1}})
+    replay_gap = %{"missing_through_sequence" => 1}
+    send(stream.pid, {:codex_app_server_replay_gap, client, replay_gap})
 
-    assert {:error, {:transport_replay_gap, %{"missing_through_sequence" => 1}}} =
-             TurnStream.wait(stream, 5_000)
+    assert %{completion: {:error, {:transport_replay_gap, ^replay_gap}}} =
+             state = :sys.get_state(stream.pid)
+
+    refute Map.has_key?(state, :done?)
+    refute Map.has_key?(state, :result)
+
+    send(task_pid, :continue)
+
+    assert {:error, {:transport_replay_gap, ^replay_gap}} = TurnStream.wait(stream, 5_000)
   end
 
   test "observer turn streams stop and unsubscribe when their request completes", %{mock: mock} do

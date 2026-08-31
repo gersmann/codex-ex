@@ -41,9 +41,9 @@ defmodule CodexEx.AppServer.TurnStream do
         }
 
   @type state :: %{
+          completion: :pending | :rpc_succeeded | {:error, term()},
           direct?: boolean(),
           client: Client.t(),
-          done?: boolean(),
           event_final_turn: Turn.t() | nil,
           final_text: binary(),
           initial_turn: Turn.t() | nil,
@@ -54,7 +54,6 @@ defmodule CodexEx.AppServer.TurnStream do
           pending_messages_rev: [Message.t()],
           rpc_final_turn: Turn.t() | nil,
           request_task: Task.t(),
-          result: {:ok, Turn.t()} | {:error, term()} | nil,
           text_deltas_rev: [binary()],
           thread_id: binary(),
           turn_id: binary() | nil,
@@ -146,9 +145,9 @@ defmodule CodexEx.AppServer.TurnStream do
 
     {:ok,
      %{
+       completion: :pending,
        direct?: direct?,
        client: client,
-       done?: false,
        event_final_turn: nil,
        final_text: "",
        initial_turn: nil,
@@ -159,7 +158,6 @@ defmodule CodexEx.AppServer.TurnStream do
        pending_messages_rev: [],
        rpc_final_turn: nil,
        request_task: request_task,
-       result: nil,
        text_deltas_rev: [],
        thread_id: thread_id,
        turn_id: nil,
@@ -171,21 +169,25 @@ defmodule CodexEx.AppServer.TurnStream do
   end
 
   @impl true
-  def handle_cast(:stop_when_done, %{done?: true} = state), do: {:stop, :normal, state}
-
-  def handle_cast(:stop_when_done, state), do: {:noreply, %{state | stop_when_done?: true}}
+  def handle_cast(:stop_when_done, state) do
+    if complete?(state) do
+      {:stop, :normal, state}
+    else
+      {:noreply, %{state | stop_when_done?: true}}
+    end
+  end
 
   @impl true
   def handle_call(:snapshot, _from, state) do
     {:reply, to_public(state), state}
   end
 
-  def handle_call(:wait, _from, %{done?: true} = state) do
-    {:stop, :normal, wait_reply(state), state}
-  end
-
   def handle_call(:wait, from, state) do
-    {:noreply, %{state | waiters: [from | state.waiters], stop_when_done?: true}}
+    if complete?(state) do
+      {:stop, :normal, wait_reply(state), state}
+    else
+      {:noreply, %{state | waiters: [from | state.waiters], stop_when_done?: true}}
+    end
   end
 
   @impl true
@@ -201,8 +203,7 @@ defmodule CodexEx.AppServer.TurnStream do
     state =
       if state.direct? do
         state
-        |> Map.put(:result, {:error, {:transport_replay_gap, payload}})
-        |> Map.put(:done?, true)
+        |> Map.put(:completion, {:error, {:transport_replay_gap, payload}})
         |> maybe_finish()
       else
         state
@@ -211,47 +212,49 @@ defmodule CodexEx.AppServer.TurnStream do
     {:noreply, state}
   end
 
-  def handle_info({ref, {:ok, %Turn{}}}, %{done?: true, request_task: %Task{ref: ref}} = state) do
-    Process.demonitor(ref, [:flush])
-    {:noreply, state}
-  end
-
   def handle_info({ref, {:ok, %Turn{} = turn}}, %{request_task: %Task{ref: ref}} = state) do
     Process.demonitor(ref, [:flush])
 
-    state =
-      state
-      |> put_turn_items(turn)
-      |> put_turn(turn)
-      |> maybe_hydrate_final_text_from_turn(turn)
-      |> put_rpc_final_turn(turn)
-      |> Map.put(:result, {:ok, turn})
-      |> replay_pending_messages()
+    if complete?(state) do
+      {:noreply, state}
+    else
+      state =
+        state
+        |> put_turn_items(turn)
+        |> put_turn(turn)
+        |> maybe_hydrate_final_text_from_turn(turn)
+        |> put_rpc_final_turn(turn)
+        |> Map.put(:completion, :rpc_succeeded)
+        |> replay_pending_messages()
 
-    state = %{state | done?: terminal_result?(state)}
-
-    {:noreply, maybe_finish(state)}
+      {:noreply, maybe_finish(state)}
+    end
   end
 
-  def handle_info({ref, {:error, _reason}}, %{done?: true, request_task: %Task{ref: ref}} = state) do
+  def handle_info({ref, {:error, reason}}, %{request_task: %Task{ref: ref}} = state) do
     Process.demonitor(ref, [:flush])
-    {:noreply, state}
-  end
 
-  def handle_info({ref, {:error, _reason} = error}, %{request_task: %Task{ref: ref}} = state) do
-    Process.demonitor(ref, [:flush])
-    {:noreply, maybe_finish(%{state | result: error, done?: true})}
-  end
-
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{done?: true, request_task: %Task{ref: ref}} = state) do
-    {:noreply, state}
+    if complete?(state) do
+      {:noreply, state}
+    else
+      {:noreply, state |> Map.put(:completion, {:error, reason}) |> maybe_finish()}
+    end
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{request_task: %Task{ref: ref}} = state) do
-    {:noreply, maybe_finish(%{state | result: {:error, {:turn_stream_crash, reason}}, done?: true})}
+    if complete?(state) do
+      {:noreply, state}
+    else
+      {:noreply,
+       state
+       |> Map.put(:completion, {:error, {:turn_stream_crash, reason}})
+       |> maybe_finish()}
+    end
   end
 
-  def handle_info(:stop_completed_stream, %{done?: true, stop_when_done?: true} = state), do: {:stop, :normal, state}
+  def handle_info(:stop_completed_stream, %{stop_when_done?: true} = state) do
+    if complete?(state), do: {:stop, :normal, state}, else: {:noreply, state}
+  end
 
   def handle_info(:stop_completed_stream, state), do: {:noreply, state}
 
@@ -264,11 +267,13 @@ defmodule CodexEx.AppServer.TurnStream do
     :ok
   end
 
-  defp handle_event_message(%{done?: true} = state, _message), do: state
-
-  defp handle_event_message(%{turn_id: nil} = state, message), do: maybe_buffer_message(state, message)
-
-  defp handle_event_message(state, message), do: state |> apply_message(message) |> maybe_finish()
+  defp handle_event_message(state, message) do
+    cond do
+      complete?(state) -> state
+      is_nil(state.turn_id) -> maybe_buffer_message(state, message)
+      true -> state |> apply_message(message) |> maybe_finish()
+    end
+  end
 
   defp apply_message(state, message) do
     if scoped_message?(state, message) do
@@ -277,7 +282,6 @@ defmodule CodexEx.AppServer.TurnStream do
       |> maybe_apply_item(Message.extract_item(message), message)
       |> maybe_put_text_delta(Message.extract_text_delta(message))
       |> maybe_put_usage(Message.extract_token_usage(message), message)
-      |> maybe_mark_done()
     else
       state
     end
@@ -419,28 +423,26 @@ defmodule CodexEx.AppServer.TurnStream do
     end
   end
 
-  defp maybe_mark_done(state) do
-    %{state | done?: terminal_result?(state)}
+  defp complete?(%{completion: {:error, _reason}}), do: true
+
+  defp complete?(%{completion: :rpc_succeeded} = state), do: match?(%Turn{}, best_final_turn(state))
+
+  defp complete?(_state), do: false
+
+  defp maybe_finish(state) do
+    if complete?(state) do
+      Enum.each(state.waiters, fn from ->
+        GenServer.reply(from, wait_reply(state))
+      end)
+
+      state = unsubscribe(state)
+      if state.stop_when_done?, do: send(self(), :stop_completed_stream)
+
+      %{state | waiters: []}
+    else
+      state
+    end
   end
-
-  defp terminal_result?(%{result: {:error, _reason}}), do: true
-
-  defp terminal_result?(%{result: {:ok, _turn}} = state), do: match?(%Turn{}, best_final_turn(state))
-
-  defp terminal_result?(_state), do: false
-
-  defp maybe_finish(%{done?: true} = state) do
-    Enum.each(state.waiters, fn from ->
-      GenServer.reply(from, wait_reply(state))
-    end)
-
-    state = unsubscribe(state)
-    if state.stop_when_done?, do: send(self(), :stop_completed_stream)
-
-    %{state | waiters: []}
-  end
-
-  defp maybe_finish(state), do: state
 
   defp unsubscribe(%{subscribed?: true} = state) do
     _ = Client.unsubscribe(state.client, self())
@@ -449,7 +451,7 @@ defmodule CodexEx.AppServer.TurnStream do
 
   defp unsubscribe(state), do: state
 
-  defp wait_reply(%{result: {:error, _reason} = error}), do: error
+  defp wait_reply(%{completion: {:error, reason}}), do: {:error, reason}
   defp wait_reply(state), do: {:ok, to_public(state)}
 
   defp bounded_wait_timeout(:infinity), do: @default_wait_timeout_ms
@@ -564,8 +566,7 @@ defmodule CodexEx.AppServer.TurnStream do
   defp put_protocol_error(state, message, reason) do
     %{
       state
-      | done?: true,
-        result: {:error, {:protocol_error, {:invalid_event_payload, Message.method_name(message), reason}}}
+      | completion: {:error, {:protocol_error, {:invalid_event_payload, Message.method_name(message), reason}}}
     }
   end
 end

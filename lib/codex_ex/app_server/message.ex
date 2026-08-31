@@ -106,7 +106,7 @@ defmodule CodexEx.AppServer.Message do
   @spec resolved_request_id(term()) :: term() | nil
   def resolved_request_id(message) do
     if method_name(message) == "serverRequest/resolved" do
-      case ProtocolValue.fetch(params(message), :request_id, ["requestId"]) do
+      case ProtocolValue.fetch(params(message), :request_id) do
         {:ok, request_id} -> request_id
         :error -> nil
       end
