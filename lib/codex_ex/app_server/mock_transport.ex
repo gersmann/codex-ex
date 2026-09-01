@@ -929,6 +929,8 @@ defmodule CodexEx.AppServer.MockTransport do
         state
       end
 
+    state = interrupt_pending_server_request(state, thread_id, turn_id)
+
     emit(state, result(id, %{}))
     state
   end
@@ -1428,7 +1430,10 @@ defmodule CodexEx.AppServer.MockTransport do
        }) do
     emit_command_execution_approval_request(state, thread_id, turn_id)
 
-    put_pending_server_request(state, request_id, thread_id, turn_id, turn, turn_opts, kind: :command_execution_approval)
+    put_pending_server_request(state, request_id, thread_id, turn_id, turn, turn_opts,
+      kind: :command_execution_approval,
+      server_request_id: "command-approval-request-1"
+    )
   end
 
   defp handle_turn_start_completion(state, request_id, thread_id, turn_id, turn, turn_opts, %{
@@ -1436,18 +1441,27 @@ defmodule CodexEx.AppServer.MockTransport do
        }) do
     emit_tool_approval_elicitation_request(state, thread_id, turn_id)
 
-    put_pending_server_request(state, request_id, thread_id, turn_id, turn, turn_opts, kind: :elicitation)
+    put_pending_server_request(state, request_id, thread_id, turn_id, turn, turn_opts,
+      kind: :elicitation,
+      server_request_id: "tool-approval-request-1"
+    )
   end
 
   defp handle_turn_start_completion(state, request_id, thread_id, turn_id, turn, turn_opts, %{server_request: true}) do
     emit_server_request(state, thread_id, turn_id)
-    put_pending_server_request(state, request_id, thread_id, turn_id, turn, turn_opts)
+
+    put_pending_server_request(state, request_id, thread_id, turn_id, turn, turn_opts,
+      server_request_id: "server-request-1"
+    )
   end
 
   defp handle_turn_start_completion(state, request_id, thread_id, turn_id, turn, turn_opts, %{elicitation_request: true}) do
     emit_elicitation_request(state, thread_id, turn_id)
 
-    put_pending_server_request(state, request_id, thread_id, turn_id, turn, turn_opts, kind: :elicitation)
+    put_pending_server_request(state, request_id, thread_id, turn_id, turn, turn_opts,
+      kind: :elicitation,
+      server_request_id: "elicitation-request-1"
+    )
   end
 
   defp handle_turn_start_completion(state, request_id, thread_id, turn_id, turn, turn_opts, %{delay_ms: delay_ms})
@@ -1468,7 +1482,7 @@ defmodule CodexEx.AppServer.MockTransport do
     state
   end
 
-  defp put_pending_server_request(state, request_id, thread_id, turn_id, turn, turn_opts, extra \\ []) do
+  defp put_pending_server_request(state, request_id, thread_id, turn_id, turn, turn_opts, extra) do
     pending_server_request =
       Enum.into(extra, %{
         request_id: request_id,
@@ -1492,6 +1506,23 @@ defmodule CodexEx.AppServer.MockTransport do
 
     %{state | pending_turns: Map.put(state.pending_turns, turn_id, pending_turn)}
   end
+
+  defp interrupt_pending_server_request(
+         %{pending_server_request: %{thread_id: thread_id, turn_id: turn_id} = pending} = state,
+         thread_id,
+         turn_id
+       ) do
+    emit(
+      state,
+      notification("serverRequest/resolved", %{"requestId" => pending.server_request_id})
+    )
+
+    interrupted_turn = Map.put(pending.turn, "status", "interrupted")
+    finalize_turn(state, pending.request_id, thread_id, turn_id, interrupted_turn, pending.opts)
+    %{state | pending_server_request: nil}
+  end
+
+  defp interrupt_pending_server_request(state, _thread_id, _turn_id), do: state
 
   defp finalize_turn(state, request_id, thread_id, turn_id, turn, opts) do
     completed_turn = terminal_notification_turn(turn, turn_id, opts)
