@@ -28,7 +28,9 @@ defmodule CodexEx.AppServer.WebSocketFixturePlug do
 
   defp upgrade(conn, opts) do
     conn
-    |> WebSockAdapter.upgrade(WebSocketFixtureServer, %{}, timeout: Keyword.get(opts, :timeout, 60_000))
+    |> WebSockAdapter.upgrade(WebSocketFixtureServer, %{push_delay_ms: Keyword.get(opts, :push_delay_ms, 0)},
+      timeout: Keyword.get(opts, :timeout, 60_000)
+    )
     |> halt()
   end
 end
@@ -161,7 +163,7 @@ defmodule CodexEx.AppServer.WebSocketFixtureServer do
     thread_id = params["threadId"]
     input = Map.get(params, "input", [])
     output_schema = Map.get(params, "outputSchema")
-    push_delay_ms = Map.get(params, "mockPushDelayMs", 0)
+    push_delay_ms = Map.get(params, "mockPushDelayMs", state.push_delay_ms)
     assistant_text = assistant_text_for_turn(input, output_schema)
     thread = Map.get(state.threads, thread_id, make_thread(thread_id))
     {turn_id, state} = next_turn_id(state)

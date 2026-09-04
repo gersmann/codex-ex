@@ -24,7 +24,8 @@ defmodule CodexEx.AppServer.ClientManager do
           clients: %{client_key() => pid()},
           refs: %{reference() => client_key()},
           thread_activity_observer_key: client_key() | nil,
-          thread_activity_retry_ref: reference() | nil
+          thread_activity_retry_ref: reference() | nil,
+          thread_activity_reconciliation: nil | %{task: Task.t(), client: pid(), rerun?: boolean()}
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -67,7 +68,8 @@ defmodule CodexEx.AppServer.ClientManager do
       clients: %{},
       refs: %{},
       thread_activity_observer_key: observer_key,
-      thread_activity_retry_ref: nil
+      thread_activity_retry_ref: nil,
+      thread_activity_reconciliation: nil
     }
 
     if observer_key,
@@ -78,15 +80,13 @@ defmodule CodexEx.AppServer.ClientManager do
   @impl true
   def handle_continue(:start_thread_activity_observer, state) do
     state = ensure_thread_activity_observer(state)
-    _ = start_thread_activity_reconciliation(state)
-    {:noreply, state}
+    {:noreply, start_thread_activity_reconciliation(state)}
   end
 
   @impl true
   def handle_cast(:reconcile_thread_activity, state) do
     state = ensure_thread_activity_observer(state)
-    _ = start_thread_activity_reconciliation(state)
-    {:noreply, state}
+    {:noreply, start_thread_activity_reconciliation(state)}
   end
 
   @impl true
@@ -127,6 +127,15 @@ defmodule CodexEx.AppServer.ClientManager do
   end
 
   @impl true
+  def handle_info({ref, result}, %{thread_activity_reconciliation: %{task: %{ref: ref}}} = state) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, finish_thread_activity_reconciliation(state, result)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{thread_activity_reconciliation: %{task: %{ref: ref}}} = state) do
+    {:noreply, finish_thread_activity_reconciliation(state, {:error, reason})}
+  end
+
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
     case Map.pop(state.refs, ref) do
       {nil, refs} ->
@@ -143,14 +152,8 @@ defmodule CodexEx.AppServer.ClientManager do
   def handle_info(:retry_thread_activity_observer, state) do
     state = cancel_thread_activity_retry(state)
     state = ensure_thread_activity_observer(state)
-    _ = start_thread_activity_reconciliation(state)
-    {:noreply, state}
+    {:noreply, start_thread_activity_reconciliation(state)}
   end
-
-  def handle_info({:thread_activity_reconciliation_finished, :ok}, state), do: {:noreply, state}
-
-  def handle_info({:thread_activity_reconciliation_finished, {:error, _reason}}, state),
-    do: {:noreply, schedule_thread_activity_retry(state)}
 
   def handle_info(_message, state), do: {:noreply, state}
 
@@ -224,30 +227,42 @@ defmodule CodexEx.AppServer.ClientManager do
     %{state | thread_activity_retry_ref: nil}
   end
 
+  @spec start_thread_activity_reconciliation(state()) :: state()
+  defp start_thread_activity_reconciliation(%{thread_activity_reconciliation: %{} = running} = state) do
+    %{state | thread_activity_reconciliation: %{running | rerun?: true}}
+  end
+
   defp start_thread_activity_reconciliation(%{thread_activity_observer_key: key} = state) when not is_nil(key) do
     case Map.get(state.clients, key) do
       client when is_pid(client) ->
-        manager = self()
+        task =
+          Task.Supervisor.async_nolink(CodexEx.TaskSupervisor, fn ->
+            reconcile_local_thread_activity(client)
+          end)
 
-        case Task.Supervisor.start_child(CodexEx.TaskSupervisor, fn ->
-               send(
-                 manager,
-                 {:thread_activity_reconciliation_finished, reconcile_local_thread_activity(client)}
-               )
-             end) do
-          {:ok, _pid} ->
-            :ok
-
-          {:error, reason} ->
-            send(manager, {:thread_activity_reconciliation_finished, {:error, reason}})
-        end
+        state
+        |> cancel_thread_activity_retry()
+        |> Map.put(:thread_activity_reconciliation, %{task: task, client: client, rerun?: false})
 
       _missing ->
-        :ok
+        state
     end
   end
 
-  defp start_thread_activity_reconciliation(_state), do: :ok
+  defp start_thread_activity_reconciliation(state), do: state
+
+  @spec finish_thread_activity_reconciliation(state(), :ok | {:error, term()}) :: state()
+  defp finish_thread_activity_reconciliation(state, result) do
+    running = state.thread_activity_reconciliation
+    current_client = Map.get(state.clients, state.thread_activity_observer_key)
+    state = %{state | thread_activity_reconciliation: nil}
+
+    cond do
+      running.rerun? or running.client != current_client -> start_thread_activity_reconciliation(state)
+      result == :ok -> state
+      true -> schedule_thread_activity_retry(state)
+    end
+  end
 
   defp reconcile_local_thread_activity(client) do
     case {

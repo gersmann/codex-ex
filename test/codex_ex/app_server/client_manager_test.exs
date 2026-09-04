@@ -120,6 +120,59 @@ defmodule CodexEx.AppServer.ClientManagerTest do
     assert_receive {:codex_thread_active, {^client, nil, nil}, ^thread_id}, 500
   end
 
+  test "coalesces running reconciliation and retries a crashed task", %{opts: opts} do
+    assert {:ok, client} = ClientManager.get_client(opts)
+    previous = :sys.get_state(ClientManager).thread_activity_observer_key
+    previous_hook = Application.get_env(:codex_ex, :thread_activity_recovery)
+    Application.put_env(:codex_ex, :thread_activity_recovery, {__MODULE__, :blocked_recovery, [self()]})
+
+    on_exit(fn ->
+      if previous_hook,
+        do: Application.put_env(:codex_ex, :thread_activity_recovery, previous_hook),
+        else: Application.delete_env(:codex_ex, :thread_activity_recovery)
+
+      reset_manager(previous)
+      stop_if_alive(client)
+    end)
+
+    key = client_key(client)
+    :sys.replace_state(ClientManager, &%{&1 | thread_activity_observer_key: key})
+    ClientManager.reconcile_thread_activity()
+    assert_receive {:recovering, first}, 1_000
+    first_ref = :sys.get_state(ClientManager).thread_activity_reconciliation.task.ref
+    assert {:ok, replacement} = ClientManager.get_client(Keyword.put(opts, :args, ["replacement-observer"]))
+    on_exit(fn -> stop_if_alive(replacement) end)
+    replacement_key = client_key(replacement)
+    :sys.replace_state(ClientManager, &%{&1 | thread_activity_observer_key: replacement_key})
+    for _ <- 1..10, do: ClientManager.reconcile_thread_activity()
+    assert :sys.get_state(ClientManager).thread_activity_reconciliation.rerun?
+    refute_receive {:recovering, _}, 50
+    send(first, :release)
+    assert_receive {:recovering, second}, 1_000
+    refute first == second
+    assert :sys.get_state(ClientManager).thread_activity_reconciliation.client == replacement
+    Process.exit(second, :kill)
+    retry_ref = await_manager_state(fn state -> state.thread_activity_retry_ref end)
+    send(ClientManager, {first_ref, :ok})
+    assert :sys.get_state(ClientManager).thread_activity_retry_ref == retry_ref
+    Process.cancel_timer(retry_ref)
+    send(ClientManager, :retry_thread_activity_observer)
+    assert_receive {:recovering, third}, 1_000
+    send(third, :release)
+
+    assert await_manager_state(fn state ->
+             if is_nil(state.thread_activity_reconciliation), do: :idle
+           end) == :idle
+  end
+
+  def blocked_recovery(test) do
+    send(test, {:recovering, self()})
+
+    receive do
+      :release -> {:ok, :recovered}
+    end
+  end
+
   defp client_key(client) when is_pid(client) do
     ClientManager
     |> :sys.get_state()

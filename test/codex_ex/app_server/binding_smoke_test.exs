@@ -62,6 +62,32 @@ defmodule CodexEx.AppServer.BindingSmokeTestTest do
     assert Enum.any?(report.logs, &(&1[:type] == "item/completed" and &1[:text] == "OK"))
   end
 
+  test "CLI honors an explicit timeout while its default tolerates the same delayed fixture" do
+    server = start_supervised!({Bandit, plug: {WebSocketFixturePlug, [push_delay_ms: 150]}, ip: :loopback, port: 0})
+    {:ok, {_address, port}} = ThousandIsland.listener_info(server)
+    paths = Enum.flat_map(:code.get_path(), &["-pa", List.to_string(&1)])
+
+    args =
+      paths ++
+        [
+          "-e",
+          "Application.ensure_all_started(:codex_ex); Code.require_file(\"priv/scripts/test_app_server_binding.exs\")",
+          "--",
+          "--transport",
+          "websocket",
+          "--url",
+          "ws://127.0.0.1:#{port}/ws",
+          "--json"
+        ]
+
+    executable = System.find_executable("elixir")
+    {short, exit_code} = System.cmd(executable, args ++ ["--timeout", "10"], stderr_to_stdout: true)
+    assert exit_code != 0
+    assert short =~ "timeout"
+    {normal, 0} = System.cmd(executable, args, stderr_to_stdout: true)
+    assert normal =~ ~s("status":"ok")
+  end
+
   test "custom prompts only assert assistant text when explicitly configured" do
     assert BindingSmokeTest.default_expected_assistant_text(
              "real",

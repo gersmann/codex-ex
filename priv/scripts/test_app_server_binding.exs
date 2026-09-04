@@ -1,8 +1,6 @@
 alias CodexAppServerBindingSmoke, as: BindingSmokeTest
 
-Code.require_file(
-  Path.join([File.cwd!(), "priv", "scripts", "support", "app_server_binding_smoke.exs"])
-)
+Code.require_file(Path.join([File.cwd!(), "priv", "scripts", "support", "app_server_binding_smoke.exs"]))
 
 {parsed, remaining, invalid} =
   OptionParser.parse(
@@ -109,25 +107,25 @@ client_opts =
       System.halt(1)
   end
 
-run_opts =
-  base_run_opts = [
-    client_opts: client_opts,
-    fixture_mode: use_fixture?,
-    expected_assistant_text:
-      BindingSmokeTest.default_expected_assistant_text(
-        mode,
-        prompt,
-        Keyword.get(parsed, :expected_text)
-      ),
-    cwd: Keyword.get(parsed, :cwd, File.cwd!()),
-    prompt: prompt
-  ]
+base_run_opts = [
+  client_opts: client_opts,
+  fixture_mode: use_fixture?,
+  expected_assistant_text:
+    BindingSmokeTest.default_expected_assistant_text(
+      mode,
+      prompt,
+      Keyword.get(parsed, :expected_text)
+    ),
+  cwd: Keyword.get(parsed, :cwd, File.cwd!()),
+  prompt: prompt
+]
 
-if timeout = Keyword.get(parsed, :timeout) do
-  Keyword.put(base_run_opts, :timeout, timeout)
-else
-  base_run_opts
-end
+run_opts =
+  if timeout = Keyword.get(parsed, :timeout) do
+    Keyword.put(base_run_opts, :timeout, timeout)
+  else
+    base_run_opts
+  end
 
 result = BindingSmokeTest.run(run_opts)
 
