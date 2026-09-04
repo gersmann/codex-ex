@@ -5,9 +5,7 @@ defmodule CodexAppServerBindingSmoke do
   alias CodexEx.AppServer.Message
   alias CodexEx.AppServer.Protocol.Generated.Shared.ServerRequest
   alias CodexEx.AppServer.Protocol.Generated.Shared.ToolRequestUserInputResponse
-
   alias CodexEx.AppServer.Protocol.Generated.Shared.ToolRequestUserInputResponse.ToolRequestUserInputAnswer
-
   alias CodexEx.AppServer.Protocol.Generated.V1.InitializeResponse
   alias CodexEx.AppServer.Thread
   alias CodexEx.AppServer.ThreadItem
@@ -20,8 +18,7 @@ defmodule CodexAppServerBindingSmoke do
 
   def default_expected_assistant_text(mode, prompt, explicit_expected_text \\ nil)
 
-  def default_expected_assistant_text(_mode, _prompt, explicit_expected_text)
-      when is_binary(explicit_expected_text) do
+  def default_expected_assistant_text(_mode, _prompt, explicit_expected_text) when is_binary(explicit_expected_text) do
     explicit_expected_text
   end
 
@@ -49,7 +46,7 @@ defmodule CodexAppServerBindingSmoke do
     fixture_mode? = Keyword.get(opts, :fixture_mode, false)
 
     %{
-      client_opts: build_client_opts(opts),
+      client_opts: Keyword.get(opts, :client_opts, []),
       expected_assistant_text: Keyword.get(opts, :expected_assistant_text),
       fixture_mode?: fixture_mode?,
       prompt: Keyword.get(opts, :prompt, @default_prompt),
@@ -287,13 +284,7 @@ defmodule CodexAppServerBindingSmoke do
     end
   end
 
-  defp await_turn_started_after_run_result(
-         thread_id,
-         timeout,
-         report,
-         skipped_messages,
-         assistant_text
-       ) do
+  defp await_turn_started_after_run_result(thread_id, timeout, report, skipped_messages, assistant_text) do
     case await_message(
            fn message ->
              if Message.method_name(message) == "turn/started" and
@@ -342,8 +333,7 @@ defmodule CodexAppServerBindingSmoke do
     end
   end
 
-  defp await_message(matcher, timeout, step, report, skipped \\ [])
-       when is_function(matcher, 1) do
+  defp await_message(matcher, timeout, step, report, skipped \\ []) when is_function(matcher, 1) do
     receive do
       {:codex_app_server_event, message} ->
         case matcher.(message) do
@@ -378,30 +368,6 @@ defmodule CodexAppServerBindingSmoke do
   end
 
   defp maybe_put_fixture_request(turn_opts, false), do: turn_opts
-
-  defp build_client_opts(opts) do
-    explicit_client_opts = Keyword.get(opts, :client_opts, [])
-
-    top_level_client_opts =
-      Keyword.take(opts, [
-        :name,
-        :initialize_params,
-        :strict_protocol,
-        :transport,
-        :url,
-        :websocket_url,
-        :bearer_token,
-        :headers,
-        :retry_attempts,
-        :retry_delay_ms,
-        :connect_opts,
-        :handshake_timeout,
-        :executable,
-        :args
-      ])
-
-    Keyword.merge(top_level_client_opts, explicit_client_opts)
-  end
 
   defp base_report(fixture_mode?) do
     %{
