@@ -9,14 +9,10 @@ defmodule CodexEx.AppServer.TypedBoundaryTest do
   alias CodexEx.AppServer.Protocol.Generated.Shared.FileChangeRequestApprovalResponse
   alias CodexEx.AppServer.Protocol.Generated.Shared.McpServerElicitationRequestResponse
   alias CodexEx.AppServer.Protocol.Generated.Shared.PermissionsRequestApprovalResponse
-
   alias CodexEx.AppServer.Protocol.Generated.Shared.PermissionsRequestApprovalResponse.GrantedPermissionProfile
-
   alias CodexEx.AppServer.Protocol.Generated.Shared.ServerNotification
   alias CodexEx.AppServer.Protocol.Generated.Shared.ToolRequestUserInputResponse
-
   alias CodexEx.AppServer.Protocol.Generated.Shared.ToolRequestUserInputResponse.ToolRequestUserInputAnswer
-
   alias CodexEx.AppServer.Protocol.GenericNotification
   alias CodexEx.AppServer.ThreadGoal
   alias CodexEx.AppServer.ThreadItem
@@ -32,8 +28,7 @@ defmodule CodexEx.AppServer.TypedBoundaryTest do
       {%McpServerElicitationRequestResponse{action: "accept", content: %{"color" => "red"}},
        %{"action" => "accept", "content" => %{"color" => "red"}}},
       {%CommandExecutionRequestApprovalResponse{decision: "accept"}, %{"decision" => "accept"}},
-      {%DynamicToolCallResponse{content_items: [], success: true},
-       %{"contentItems" => [], "success" => true}},
+      {%DynamicToolCallResponse{content_items: [], success: true}, %{"contentItems" => [], "success" => true}},
       {%ExecCommandApprovalResponse{decision: "accept"}, %{"decision" => "accept"}},
       {%FileChangeRequestApprovalResponse{decision: "accept"}, %{"decision" => "accept"}},
       {%ApplyPatchApprovalResponse{decision: "accept"}, %{"decision" => "accept"}},

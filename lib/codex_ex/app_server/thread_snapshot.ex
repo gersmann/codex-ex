@@ -132,8 +132,7 @@ defmodule CodexEx.AppServer.ThreadSnapshot do
   # Decode the wire union here so local and remote observation share that contract.
   defp normalize_source(source) when is_binary(source), do: {:ok, source}
 
-  defp normalize_source(%{"custom" => name} = source)
-       when is_binary(name) and map_size(source) == 1, do: {:ok, "custom"}
+  defp normalize_source(%{"custom" => name} = source) when is_binary(name) and map_size(source) == 1, do: {:ok, "custom"}
 
   defp normalize_source(%{"subAgent" => source} = value) when map_size(value) == 1 do
     case source do
@@ -158,8 +157,7 @@ defmodule CodexEx.AppServer.ThreadSnapshot do
     end
   end
 
-  defp normalize_source(source),
-    do: {:error, {:invalid_thread_snapshot, {:invalid_field, :source, source}}}
+  defp normalize_source(source), do: {:error, {:invalid_thread_snapshot, {:invalid_field, :source, source}}}
 
   defp normalize_git_info(nil), do: {:ok, nil}
 
@@ -184,14 +182,12 @@ defmodule CodexEx.AppServer.ThreadSnapshot do
     end
   end
 
-  defp normalize_git_info(other),
-    do: {:error, {:invalid_thread_snapshot, {:invalid_git_info, other}}}
+  defp normalize_git_info(other), do: {:error, {:invalid_thread_snapshot, {:invalid_git_info, other}}}
 
   defp normalize_history_mode(nil), do: {:ok, "legacy"}
   defp normalize_history_mode(mode) when mode in ["legacy", "paginated"], do: {:ok, mode}
 
-  defp normalize_history_mode(other),
-    do: {:error, {:invalid_thread_snapshot, {:invalid_field, :history_mode, other}}}
+  defp normalize_history_mode(other), do: {:error, {:invalid_thread_snapshot, {:invalid_field, :history_mode, other}}}
 
   defp normalize_status(status) when is_binary(status), do: {:ok, status}
 
@@ -213,8 +209,7 @@ defmodule CodexEx.AppServer.ThreadSnapshot do
 
   defp normalize_status(nil), do: {:error, {:invalid_thread_snapshot, {:missing_field, :status}}}
 
-  defp normalize_status(other),
-    do: {:error, {:invalid_thread_snapshot, {:invalid_field, :status, other}}}
+  defp normalize_status(other), do: {:error, {:invalid_thread_snapshot, {:invalid_field, :status, other}}}
 
   defp normalize_turns(turns, thread_id) when is_list(turns) do
     turns
@@ -230,11 +225,9 @@ defmodule CodexEx.AppServer.ThreadSnapshot do
     end
   end
 
-  defp normalize_turns(nil, _thread_id),
-    do: {:error, {:invalid_thread_snapshot, {:missing_field, :turns}}}
+  defp normalize_turns(nil, _thread_id), do: {:error, {:invalid_thread_snapshot, {:missing_field, :turns}}}
 
-  defp normalize_turns(other, _thread_id),
-    do: {:error, {:invalid_thread_snapshot, {:invalid_field, :turns, other}}}
+  defp normalize_turns(other, _thread_id), do: {:error, {:invalid_thread_snapshot, {:invalid_field, :turns, other}}}
 
   defp fetch_required_binary(map, field) do
     case ProtocolValue.fetch(map, field) do
