@@ -2,6 +2,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.ServerNotification do
   @moduledoc false
 
   alias CodexEx.AppServer.Protocol.Codec
+  alias CodexEx.AppServer.Protocol.Generated.V2.AuthRecoveryNotification
   alias CodexEx.AppServer.Protocol.Generated.V2.EnvironmentConnectionNotification
 
   defstruct [:id, :method, :params]
@@ -18,6 +19,9 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.ServerNotification do
     },
     "app/list/updated" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.AppListUpdatedNotification
+    },
+    "autoApprovalReview/strictReviewRequired" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.StrictReviewRequiredNotification
     },
     "command/exec/outputDelta" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.CommandExecOutputDeltaNotification
@@ -95,6 +99,9 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.ServerNotification do
     "item/started" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.ItemStartedNotification
     },
+    "mcpServer/event/stream/notification" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.McpServerEventStreamNotification
+    },
     "mcpServer/oauthLogin/completed" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.McpServerOauthLoginCompletedNotification
     },
@@ -110,11 +117,20 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.ServerNotification do
     "model/verification" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.ModelVerificationNotification
     },
+    "modelProvider/authRecoveryCompleted" => %{
+      params_module: AuthRecoveryNotification
+    },
+    "modelProvider/authRecoveryStarted" => %{
+      params_module: AuthRecoveryNotification
+    },
     "process/exited" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.ProcessExitedNotification
     },
     "process/outputDelta" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.ProcessOutputDeltaNotification
+    },
+    "project/changed" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.ProjectChangedNotification
     },
     "remoteControl/status/changed" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.RemoteControlStatusChangedNotification
@@ -152,6 +168,9 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.ServerNotification do
     "thread/name/updated" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.ThreadNameUpdatedNotification
     },
+    "thread/project/updated" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.ThreadProjectUpdatedNotification
+    },
     "thread/queue/changed" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.ThreadQueueChangedNotification
     },
@@ -160,6 +179,15 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.ServerNotification do
     },
     "thread/realtime/error" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.ThreadRealtimeErrorNotification
+    },
+    "thread/realtime/item/completed" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.ThreadRealtimeItemCompletedNotification
+    },
+    "thread/realtime/item/started" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.ThreadRealtimeItemStartedNotification
+    },
+    "thread/realtime/item/transcript/delta" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.ThreadRealtimeItemTranscriptDeltaNotification
     },
     "thread/realtime/itemAdded" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.ThreadRealtimeItemAddedNotification

@@ -56,18 +56,114 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigRequirementsReadResponse
     def encode(other), do: Codec.encode_value(:plain, other)
   end
 
+  defmodule BrowserUseOriginPolicy do
+    @moduledoc false
+
+    defstruct [
+      :access,
+      :access_approval_lifetime,
+      :auto_review,
+      :downloads,
+      :full_cdp_access,
+      :persistent_approval,
+      :uploads
+    ]
+
+    @field_specs [
+      %{spec: {:nullable, :plain}, field: :access, required: false, wire_key: "access"},
+      %{
+        spec: {:nullable, :plain},
+        field: :access_approval_lifetime,
+        required: false,
+        wire_key: "accessApprovalLifetime"
+      },
+      %{spec: {:nullable, :plain}, field: :auto_review, required: false, wire_key: "autoReview"},
+      %{spec: {:nullable, :plain}, field: :downloads, required: false, wire_key: "downloads"},
+      %{
+        spec: {:nullable, :plain},
+        field: :full_cdp_access,
+        required: false,
+        wire_key: "fullCdpAccess"
+      },
+      %{
+        spec: {:nullable, :plain},
+        field: :persistent_approval,
+        required: false,
+        wire_key: "persistentApproval"
+      },
+      %{spec: {:nullable, :plain}, field: :uploads, required: false, wire_key: "uploads"}
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
   defmodule BrowserUseRequirements do
     @moduledoc false
 
-    defstruct [:disable_auto_review]
+    alias ConfigRequirementsReadResponse, as: ParentModule
+
+    defstruct [
+      :allow_global_persistent_approval,
+      :allow_history_access,
+      :default_origin_policy,
+      :disable_auto_review,
+      :origins
+    ]
 
     @field_specs [
+      %{
+        spec: {:nullable, :plain},
+        field: :allow_global_persistent_approval,
+        required: false,
+        wire_key: "allowGlobalPersistentApproval"
+      },
+      %{
+        spec: {:nullable, :plain},
+        field: :allow_history_access,
+        required: false,
+        wire_key: "allowHistoryAccess"
+      },
+      %{
+        spec: {:nullable, {:module, Module.concat(ParentModule, "BrowserUseOriginPolicy")}},
+        field: :default_origin_policy,
+        required: false,
+        wire_key: "defaultOriginPolicy"
+      },
       %{
         spec: {:nullable, :plain},
         field: :disable_auto_review,
         required: false,
         wire_key: "disableAutoReview"
-      }
+      },
+      %{spec: {:nullable, :plain}, field: :origins, required: false, wire_key: "origins"}
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
+  defmodule ComputerUseMacosRequirements do
+    @moduledoc false
+
+    defstruct [:bundle_ids]
+
+    @field_specs [
+      %{spec: {:nullable, :plain}, field: :bundle_ids, required: false, wire_key: "bundleIds"}
     ]
 
     def decode(payload) when is_map(payload) do
@@ -84,7 +180,15 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigRequirementsReadResponse
   defmodule ComputerUseRequirements do
     @moduledoc false
 
-    defstruct [:allow_locked_computer_use]
+    alias ConfigRequirementsReadResponse, as: ParentModule
+
+    defstruct [
+      :allow_locked_computer_use,
+      :allow_persistent_approval,
+      :default_app_access,
+      :macos,
+      :windows
+    ]
 
     @field_specs [
       %{
@@ -92,6 +196,81 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigRequirementsReadResponse
         field: :allow_locked_computer_use,
         required: false,
         wire_key: "allowLockedComputerUse"
+      },
+      %{
+        spec: {:nullable, :plain},
+        field: :allow_persistent_approval,
+        required: false,
+        wire_key: "allowPersistentApproval"
+      },
+      %{
+        spec: {:nullable, :plain},
+        field: :default_app_access,
+        required: false,
+        wire_key: "defaultAppAccess"
+      },
+      %{
+        spec: {:nullable, {:module, Module.concat(ParentModule, "ComputerUseMacosRequirements")}},
+        field: :macos,
+        required: false,
+        wire_key: "macos"
+      },
+      %{
+        spec: {:nullable, {:module, Module.concat(ParentModule, "ComputerUseWindowsRequirements")}},
+        field: :windows,
+        required: false,
+        wire_key: "windows"
+      }
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
+  defmodule ComputerUseWindowsExeRequirement do
+    @moduledoc false
+
+    defstruct [:access, :binary_name, :product_name, :publisher_name]
+
+    @field_specs [
+      %{spec: :plain, field: :access, required: true, wire_key: "access"},
+      %{spec: {:nullable, :plain}, field: :binary_name, required: false, wire_key: "binaryName"},
+      %{spec: :plain, field: :product_name, required: true, wire_key: "productName"},
+      %{spec: :plain, field: :publisher_name, required: true, wire_key: "publisherName"}
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
+  defmodule ComputerUseWindowsRequirements do
+    @moduledoc false
+
+    alias ConfigRequirementsReadResponse, as: ParentModule
+
+    defstruct [:aumids, :exes]
+
+    @field_specs [
+      %{spec: {:nullable, :plain}, field: :aumids, required: false, wire_key: "aumids"},
+      %{
+        spec: {:nullable, {:array, {:module, Module.concat(ParentModule, "ComputerUseWindowsExeRequirement")}}},
+        field: :exes,
+        required: false,
+        wire_key: "exes"
       }
     ]
 
@@ -112,7 +291,9 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigRequirementsReadResponse
     alias ConfigRequirementsReadResponse, as: ParentModule
 
     defstruct [
+      :additional_developer_instructions,
       :allow_appshots,
+      :allow_browser_and_computer_use,
       :allow_login_shell,
       :allow_managed_hooks_only,
       :allow_remote_control,
@@ -124,13 +305,16 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigRequirementsReadResponse
       :allowed_windows_sandbox_implementations,
       :auto_review,
       :browser_use,
+      :chatgpt_base_url,
       :check_for_update_on_startup,
+      :cli_auth_credentials_store,
       :computer_use,
       :default_permissions,
       :enforce_residency,
       :feature_requirements,
       :feedback,
       :hooks,
+      :in_app_browser,
       :log_dir,
       :model_catalog_json,
       :models,
@@ -142,9 +326,21 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigRequirementsReadResponse
     @field_specs [
       %{
         spec: {:nullable, :plain},
+        field: :additional_developer_instructions,
+        required: false,
+        wire_key: "additionalDeveloperInstructions"
+      },
+      %{
+        spec: {:nullable, :plain},
         field: :allow_appshots,
         required: false,
         wire_key: "allowAppshots"
+      },
+      %{
+        spec: {:nullable, :plain},
+        field: :allow_browser_and_computer_use,
+        required: false,
+        wire_key: "allowBrowserAndComputerUse"
       },
       %{
         spec: {:nullable, :plain},
@@ -214,9 +410,21 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigRequirementsReadResponse
       },
       %{
         spec: {:nullable, :plain},
+        field: :chatgpt_base_url,
+        required: false,
+        wire_key: "chatgptBaseUrl"
+      },
+      %{
+        spec: {:nullable, :plain},
         field: :check_for_update_on_startup,
         required: false,
         wire_key: "checkForUpdateOnStartup"
+      },
+      %{
+        spec: {:nullable, :plain},
+        field: :cli_auth_credentials_store,
+        required: false,
+        wire_key: "cliAuthCredentialsStore"
       },
       %{
         spec: {:nullable, {:module, Module.concat(ParentModule, "ComputerUseRequirements")}},
@@ -253,6 +461,12 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigRequirementsReadResponse
         field: :hooks,
         required: false,
         wire_key: "hooks"
+      },
+      %{
+        spec: {:nullable, {:module, Module.concat(ParentModule, "InAppBrowserRequirements")}},
+        field: :in_app_browser,
+        required: false,
+        wire_key: "inAppBrowser"
       },
       %{spec: {:nullable, :plain}, field: :log_dir, required: false, wire_key: "logDir"},
       %{
@@ -334,12 +548,38 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigRequirementsReadResponse
     def encode(other), do: Codec.encode_value(:plain, other)
   end
 
+  defmodule InAppBrowserRequirements do
+    @moduledoc false
+
+    defstruct [:allow_external_browser_settings_import]
+
+    @field_specs [
+      %{
+        spec: {:nullable, :plain},
+        field: :allow_external_browser_settings_import,
+        required: false,
+        wire_key: "allowExternalBrowserSettingsImport"
+      }
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
   defmodule ManagedHooksRequirements do
     @moduledoc false
 
     alias ConfigRequirementsReadResponse, as: ParentModule
 
     defstruct [
+      :interrupt,
       :permission_request,
       :post_compact,
       :post_tool_use,
@@ -356,6 +596,12 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigRequirementsReadResponse
     ]
 
     @field_specs [
+      %{
+        spec: {:array, {:module, Module.concat(ParentModule, "ConfiguredHookMatcherGroup")}},
+        field: :interrupt,
+        required: false,
+        wire_key: "Interrupt"
+      },
       %{
         spec: {:array, {:module, Module.concat(ParentModule, "ConfiguredHookMatcherGroup")}},
         field: :permission_request,

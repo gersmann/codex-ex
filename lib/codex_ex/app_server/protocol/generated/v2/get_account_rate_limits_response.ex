@@ -4,15 +4,23 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.GetAccountRateLimitsResponse d
   alias CodexEx.AppServer.Protocol.Codec
   alias CodexEx.AppServer.Protocol.Generated.V2.GetAccountRateLimitsResponse
 
-  defstruct [:rate_limit_reset_credits, :rate_limits, :rate_limits_by_limit_id]
+  defstruct [
+    :account_id,
+    :rate_limit_reset_credits,
+    :rate_limit_upsell,
+    :rate_limits,
+    :rate_limits_by_limit_id
+  ]
 
   @field_specs [
+    %{spec: {:nullable, :plain}, field: :account_id, required: false, wire_key: "accountId"},
     %{
       spec: {:nullable, {:module, Module.concat(__MODULE__, "RateLimitResetCreditsSummary")}},
       field: :rate_limit_reset_credits,
       required: false,
       wire_key: "rateLimitResetCredits"
     },
+    %{spec: :plain, field: :rate_limit_upsell, required: false, wire_key: "rateLimitUpsell"},
     %{
       spec: {:module, Module.concat(__MODULE__, "RateLimitSnapshot")},
       field: :rate_limits,

@@ -13,6 +13,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.CommandExecutionRequestApp
     :cwd,
     :environment_id,
     :item_id,
+    :kind,
     :network_approval_context,
     :proposed_execpolicy_amendment,
     :proposed_network_policy_amendments,
@@ -51,6 +52,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.CommandExecutionRequestApp
       wire_key: "environmentId"
     },
     %{spec: :plain, field: :item_id, required: true, wire_key: "itemId"},
+    %{spec: :plain, field: :kind, required: false, wire_key: "kind"},
     %{
       spec: {:nullable, {:module, Module.concat(__MODULE__, "NetworkApprovalContext")}},
       field: :network_approval_context,

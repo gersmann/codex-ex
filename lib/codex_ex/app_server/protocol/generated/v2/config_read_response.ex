@@ -63,6 +63,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigReadResponse do
       :default_tools_enabled,
       :destructive_enabled,
       :enabled,
+      :links,
       :open_world_enabled,
       :tools
     ]
@@ -94,6 +95,12 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigReadResponse do
       },
       %{spec: :plain, field: :enabled, required: false, wire_key: "enabled"},
       %{
+        spec: {:nullable, {:module, Module.concat(ParentModule, "AppLinksConfig")}},
+        field: :links,
+        required: false,
+        wire_key: "links"
+      },
+      %{
         spec: {:nullable, :plain},
         field: :open_world_enabled,
         required: false,
@@ -106,6 +113,55 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigReadResponse do
         wire_key: "tools"
       }
     ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
+  defmodule AppLinkConfig do
+    @moduledoc false
+
+    defstruct [:approvals_reviewer, :default_tools_approval_mode]
+
+    @field_specs [
+      %{
+        spec: {:nullable, :plain},
+        field: :approvals_reviewer,
+        required: false,
+        wire_key: "approvals_reviewer"
+      },
+      %{
+        spec: {:nullable, :plain},
+        field: :default_tools_approval_mode,
+        required: false,
+        wire_key: "default_tools_approval_mode"
+      }
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
+  defmodule AppLinksConfig do
+    @moduledoc false
+
+    defstruct []
+
+    @field_specs []
 
     def decode(payload) when is_map(payload) do
       Codec.decode_object(__MODULE__, @field_specs, payload)
@@ -234,6 +290,178 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigReadResponse do
     def encode(other), do: Codec.encode_value(:plain, other)
   end
 
+  defmodule BrowserUseConfig do
+    @moduledoc false
+
+    alias ConfigReadResponse, as: ParentModule
+
+    defstruct [:allow_history_access, :default_origin_policy, :origins]
+
+    @field_specs [
+      %{
+        spec: {:nullable, :plain},
+        field: :allow_history_access,
+        required: false,
+        wire_key: "allow_history_access"
+      },
+      %{
+        spec: {:nullable, {:module, Module.concat(ParentModule, "BrowserUseOriginPolicyConfig")}},
+        field: :default_origin_policy,
+        required: false,
+        wire_key: "default_origin_policy"
+      },
+      %{spec: {:nullable, :plain}, field: :origins, required: false, wire_key: "origins"}
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
+  defmodule BrowserUseOriginPolicyConfig do
+    @moduledoc false
+
+    defstruct [:access, :downloads, :full_cdp_access, :uploads]
+
+    @field_specs [
+      %{spec: {:nullable, :plain}, field: :access, required: false, wire_key: "access"},
+      %{spec: {:nullable, :plain}, field: :downloads, required: false, wire_key: "downloads"},
+      %{
+        spec: {:nullable, :plain},
+        field: :full_cdp_access,
+        required: false,
+        wire_key: "full_cdp_access"
+      },
+      %{spec: {:nullable, :plain}, field: :uploads, required: false, wire_key: "uploads"}
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
+  defmodule ComputerUseConfig do
+    @moduledoc false
+
+    alias ConfigReadResponse, as: ParentModule
+
+    defstruct [:default_app_access, :macos, :windows]
+
+    @field_specs [
+      %{
+        spec: {:nullable, :plain},
+        field: :default_app_access,
+        required: false,
+        wire_key: "default_app_access"
+      },
+      %{
+        spec: {:nullable, {:module, Module.concat(ParentModule, "ComputerUseMacosConfig")}},
+        field: :macos,
+        required: false,
+        wire_key: "macos"
+      },
+      %{
+        spec: {:nullable, {:module, Module.concat(ParentModule, "ComputerUseWindowsConfig")}},
+        field: :windows,
+        required: false,
+        wire_key: "windows"
+      }
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
+  defmodule ComputerUseMacosConfig do
+    @moduledoc false
+
+    defstruct [:bundle_ids]
+
+    @field_specs [
+      %{spec: {:nullable, :plain}, field: :bundle_ids, required: false, wire_key: "bundle_ids"}
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
+  defmodule ComputerUseWindowsConfig do
+    @moduledoc false
+
+    alias ConfigReadResponse, as: ParentModule
+
+    defstruct [:aumids, :exes]
+
+    @field_specs [
+      %{spec: {:nullable, :plain}, field: :aumids, required: false, wire_key: "aumids"},
+      %{
+        spec: {:nullable, {:array, {:module, Module.concat(ParentModule, "ComputerUseWindowsExeConfig")}}},
+        field: :exes,
+        required: false,
+        wire_key: "exes"
+      }
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
+  defmodule ComputerUseWindowsExeConfig do
+    @moduledoc false
+
+    defstruct [:access, :binary_name, :product_name, :publisher_name]
+
+    @field_specs [
+      %{spec: :plain, field: :access, required: true, wire_key: "access"},
+      %{spec: {:nullable, :plain}, field: :binary_name, required: false, wire_key: "binary_name"},
+      %{spec: :plain, field: :product_name, required: true, wire_key: "product_name"},
+      %{spec: :plain, field: :publisher_name, required: true, wire_key: "publisher_name"}
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
   defmodule Config do
     @moduledoc false
 
@@ -244,7 +472,9 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigReadResponse do
       :approval_policy,
       :approvals_reviewer,
       :apps,
+      :browser_use,
       :compact_prompt,
+      :computer_use,
       :desktop,
       :developer_instructions,
       :forced_chatgpt_workspace_id,
@@ -292,10 +522,22 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigReadResponse do
         wire_key: "apps"
       },
       %{
+        spec: {:nullable, {:module, Module.concat(ParentModule, "BrowserUseConfig")}},
+        field: :browser_use,
+        required: false,
+        wire_key: "browser_use"
+      },
+      %{
         spec: {:nullable, :plain},
         field: :compact_prompt,
         required: false,
         wire_key: "compact_prompt"
+      },
+      %{
+        spec: {:nullable, {:module, Module.concat(ParentModule, "ComputerUseConfig")}},
+        field: :computer_use,
+        required: false,
+        wire_key: "computer_use"
       },
       %{spec: {:nullable, :plain}, field: :desktop, required: false, wire_key: "desktop"},
       %{

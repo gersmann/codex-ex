@@ -8,9 +8,15 @@ defmodule CodexEx.AppServer.TypedBoundaryTest do
   alias CodexEx.AppServer.Protocol.Generated.Shared.ExecCommandApprovalResponse
   alias CodexEx.AppServer.Protocol.Generated.Shared.FileChangeRequestApprovalResponse
   alias CodexEx.AppServer.Protocol.Generated.Shared.McpServerElicitationRequestResponse
+  alias CodexEx.AppServer.Protocol.Generated.Shared.PermissionsRequestApprovalResponse
+
+  alias CodexEx.AppServer.Protocol.Generated.Shared.PermissionsRequestApprovalResponse.GrantedPermissionProfile
+
   alias CodexEx.AppServer.Protocol.Generated.Shared.ServerNotification
   alias CodexEx.AppServer.Protocol.Generated.Shared.ToolRequestUserInputResponse
+
   alias CodexEx.AppServer.Protocol.Generated.Shared.ToolRequestUserInputResponse.ToolRequestUserInputAnswer
+
   alias CodexEx.AppServer.Protocol.GenericNotification
   alias CodexEx.AppServer.ThreadGoal
   alias CodexEx.AppServer.ThreadItem
@@ -26,10 +32,15 @@ defmodule CodexEx.AppServer.TypedBoundaryTest do
       {%McpServerElicitationRequestResponse{action: "accept", content: %{"color" => "red"}},
        %{"action" => "accept", "content" => %{"color" => "red"}}},
       {%CommandExecutionRequestApprovalResponse{decision: "accept"}, %{"decision" => "accept"}},
-      {%DynamicToolCallResponse{content_items: [], success: true}, %{"contentItems" => [], "success" => true}},
+      {%DynamicToolCallResponse{content_items: [], success: true},
+       %{"contentItems" => [], "success" => true}},
       {%ExecCommandApprovalResponse{decision: "accept"}, %{"decision" => "accept"}},
       {%FileChangeRequestApprovalResponse{decision: "accept"}, %{"decision" => "accept"}},
-      {%ApplyPatchApprovalResponse{decision: "accept"}, %{"decision" => "accept"}}
+      {%ApplyPatchApprovalResponse{decision: "accept"}, %{"decision" => "accept"}},
+      {%PermissionsRequestApprovalResponse{
+         permissions: %GrantedPermissionProfile{},
+         scope: "turn"
+       }, %{"permissions" => %{}, "scope" => "turn"}}
     ]
 
     Enum.each(payloads, fn {payload, expected} ->
@@ -94,6 +105,49 @@ defmodule CodexEx.AppServer.TypedBoundaryTest do
     for source <- ~w(subAgent subAgentReview subAgentCompact subAgentThreadSpawn subAgentOther) do
       assert ThreadSnapshot.subagent?(%{snapshot | source: source, thread_source: nil})
     end
+
+    for source <- [
+          %{"subAgent" => "review"},
+          %{"subAgent" => "compact"},
+          %{"subAgent" => "memory_consolidation"},
+          %{"subAgent" => %{"other" => "analysis"}},
+          %{
+            "subAgent" => %{
+              "thread_spawn" => %{
+                "agent_nickname" => "Dirac",
+                "agent_path" => "/root/implement_terminal",
+                "agent_role" => nil,
+                "depth" => 1,
+                "parent_thread_id" => "01a06dfa-3e23-7ac2-b46e-863f32fdc4e6"
+              }
+            }
+          }
+        ] do
+      assert {:ok, decoded} =
+               ThreadSnapshot.from_protocol(%{
+                 payload
+                 | "source" => source,
+                   "threadSource" => nil
+               })
+
+      assert ThreadSnapshot.subagent?(decoded)
+    end
+
+    assert {:error, {:invalid_thread_snapshot, {:invalid_field, :source, _}}} =
+             ThreadSnapshot.from_protocol(%{
+               payload
+               | "source" => %{"subAgent" => %{"thread_spawn" => %{}}}
+             })
+
+    assert {:ok, custom} =
+             ThreadSnapshot.from_protocol(%{
+               payload
+               | "source" => %{"custom" => "external"},
+                 "threadSource" => nil
+             })
+
+    assert custom.source == "custom"
+    refute ThreadSnapshot.subagent?(custom)
 
     assert snapshot.git_info.origin_url == "git@example.com/repo.git"
 

@@ -22,6 +22,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadStartParams do
     :multi_agent_mode,
     :permissions,
     :personality,
+    :project_id,
     :runtime_workspace_roots,
     :sandbox,
     :selected_capability_roots,
@@ -105,6 +106,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadStartParams do
     },
     %{spec: {:nullable, :plain}, field: :permissions, required: false, wire_key: "permissions"},
     %{spec: {:nullable, :plain}, field: :personality, required: false, wire_key: "personality"},
+    %{spec: {:nullable, :plain}, field: :project_id, required: false, wire_key: "projectId"},
     %{
       spec: {:nullable, {:array, :plain}},
       field: :runtime_workspace_roots,

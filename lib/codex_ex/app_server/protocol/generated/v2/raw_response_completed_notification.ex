@@ -3,7 +3,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.RawResponseCompletedNotificati
 
   alias CodexEx.AppServer.Protocol.Codec
 
-  defstruct [:response_id, :thread_id, :turn_id, :usage]
+  defstruct [:response_id, :thread_id, :turn_id, :usage, :usage_metadata]
 
   @field_specs [
     %{spec: :plain, field: :response_id, required: true, wire_key: "responseId"},
@@ -14,6 +14,12 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.RawResponseCompletedNotificati
       field: :usage,
       required: false,
       wire_key: "usage"
+    },
+    %{
+      spec: {:nullable, {:module, Module.concat(__MODULE__, "ResponseUsageMetadata")}},
+      field: :usage_metadata,
+      required: false,
+      wire_key: "usageMetadata"
     }
   ]
 
@@ -26,6 +32,27 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.RawResponseCompletedNotificati
   def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
 
   def encode(other), do: Codec.encode_value(:plain, other)
+
+  defmodule ResponseUsageMetadata do
+    @moduledoc false
+
+    defstruct [:amount, :metadata]
+
+    @field_specs [
+      %{spec: {:nullable, :plain}, field: :amount, required: false, wire_key: "amount"},
+      %{spec: :plain, field: :metadata, required: false, wire_key: "metadata"}
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
 
   defmodule TokenUsageBreakdown do
     @moduledoc false

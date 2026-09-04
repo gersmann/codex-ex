@@ -588,6 +588,11 @@ conversion and `normalize_map/1` to strip struct metadata.
 
 #### `SchemaSnapshot`
 
+The committed schema and generated bindings were refreshed with `codex-cli 0.153.3`
+and `--experimental` on 2026-09-04 (416 schema files). This replaces the unversioned
+snapshot extracted in `f4e203e`; that earlier export did not record a CLI version.
+The release baseline is documented in the [official changelog](https://learn.chatgpt.com/docs/changelog).
+
 Exports the JSON Schema from the `codex` CLI to
 `priv/schema/`.
 

@@ -146,6 +146,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.SkillsListResponse do
       :interface,
       :name,
       :path,
+      :plugin_id,
       :scope,
       :short_description
     ]
@@ -167,6 +168,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.SkillsListResponse do
       },
       %{spec: :plain, field: :name, required: true, wire_key: "name"},
       %{spec: :plain, field: :path, required: true, wire_key: "path"},
+      %{spec: {:nullable, :plain}, field: :plugin_id, required: false, wire_key: "pluginId"},
       %{spec: :plain, field: :scope, required: true, wire_key: "scope"},
       %{
         spec: {:nullable, :plain},

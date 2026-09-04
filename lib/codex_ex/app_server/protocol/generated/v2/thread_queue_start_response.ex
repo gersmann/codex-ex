@@ -25,6 +25,32 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadQueueStartResponse do
 
   def encode(other), do: Codec.encode_value(:plain, other)
 
+  defmodule AsyncUserInputQuestion do
+    @moduledoc false
+
+    defstruct [:options, :title]
+
+    @field_specs [
+      %{
+        spec: {:nullable, {:array, :plain}},
+        field: :options,
+        required: false,
+        wire_key: "options"
+      },
+      %{spec: :plain, field: :title, required: true, wire_key: "title"}
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
   defmodule ByteRange do
     @moduledoc false
 
@@ -225,6 +251,58 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadQueueStartResponse do
     def encode(other), do: Codec.encode_value(:plain, other)
   end
 
+  defmodule MisalignmentErrorDetails do
+    @moduledoc false
+
+    alias ThreadQueueStartResponse, as: ParentModule
+
+    defstruct [:detailed_explanation, :error_type, :steer]
+
+    @field_specs [
+      %{
+        spec: {:nullable, :plain},
+        field: :detailed_explanation,
+        required: false,
+        wire_key: "detailedExplanation"
+      },
+      %{spec: {:nullable, :plain}, field: :error_type, required: false, wire_key: "errorType"},
+      %{
+        spec: {:nullable, {:module, Module.concat(ParentModule, "MisalignmentSteer")}},
+        field: :steer,
+        required: false,
+        wire_key: "steer"
+      }
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
+  defmodule MisalignmentSteer do
+    @moduledoc false
+
+    defstruct [:message]
+
+    @field_specs [%{spec: :plain, field: :message, required: true, wire_key: "message"}]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
   defmodule TextElement do
     @moduledoc false
 
@@ -304,7 +382,9 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadQueueStartResponse do
   defmodule TurnError do
     @moduledoc false
 
-    defstruct [:additional_details, :codex_error_info, :message]
+    alias ThreadQueueStartResponse, as: ParentModule
+
+    defstruct [:additional_details, :codex_error_info, :message, :misalignment]
 
     @field_specs [
       %{
@@ -319,7 +399,13 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadQueueStartResponse do
         required: false,
         wire_key: "codexErrorInfo"
       },
-      %{spec: :plain, field: :message, required: true, wire_key: "message"}
+      %{spec: :plain, field: :message, required: true, wire_key: "message"},
+      %{
+        spec: {:nullable, {:module, Module.concat(ParentModule, "MisalignmentErrorDetails")}},
+        field: :misalignment,
+        required: false,
+        wire_key: "misalignment"
+      }
     ]
 
     def decode(payload) when is_map(payload) do

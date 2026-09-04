@@ -6,6 +6,12 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.ClientRequest do
   defstruct [:id, :method, :params]
 
   @method_specs %{
+    "account/bedrock/discover" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.BedrockDiscoverParams
+    },
+    "account/bedrock/setup" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.BedrockSetupParams
+    },
     "account/login/cancel" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.CancelLoginAccountParams
     },
@@ -116,6 +122,12 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.ClientRequest do
     "marketplace/upgrade" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.MarketplaceUpgradeParams
     },
+    "mcpServer/event/stream/start" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.McpServerEventStreamStartParams
+    },
+    "mcpServer/event/stream/stop" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.McpServerEventStreamStopParams
+    },
     "mcpServer/oauth/login" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.McpServerOauthLoginParams
     },
@@ -147,6 +159,9 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.ClientRequest do
     },
     "plugin/list" => %{params_module: CodexEx.AppServer.Protocol.Generated.V2.PluginListParams},
     "plugin/read" => %{params_module: CodexEx.AppServer.Protocol.Generated.V2.PluginReadParams},
+    "plugin/reconcile" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.PluginReconcileParams
+    },
     "plugin/search" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.PluginSearchParams
     },
@@ -180,6 +195,21 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.ClientRequest do
     },
     "process/writeStdin" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.ProcessWriteStdinParams
+    },
+    "project/create" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.ProjectCreateParams
+    },
+    "project/delete" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.ProjectDeleteParams
+    },
+    "project/import" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.ProjectImportParams
+    },
+    "project/list" => %{params_module: CodexEx.AppServer.Protocol.Generated.V2.ProjectListParams},
+    "project/move" => %{params_module: CodexEx.AppServer.Protocol.Generated.V2.ProjectMoveParams},
+    "project/read" => %{params_module: CodexEx.AppServer.Protocol.Generated.V2.ProjectReadParams},
+    "project/update" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.ProjectUpdateParams
     },
     "remoteControl/client/list" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.RemoteControlClientsListParams
@@ -325,6 +355,9 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.ClientRequest do
       params_module: CodexEx.AppServer.Protocol.Generated.V2.ThreadShellCommandParams
     },
     "thread/start" => %{params_module: CodexEx.AppServer.Protocol.Generated.V2.ThreadStartParams},
+    "thread/timeline/list" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.ThreadTimelineListParams
+    },
     "thread/turns/list" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.ThreadTurnsListParams
     },
@@ -348,6 +381,9 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.ClientRequest do
     },
     "turn/interrupt" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.TurnInterruptParams
+    },
+    "turn/settings/update" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.TurnSettingsUpdateParams
     },
     "turn/start" => %{params_module: CodexEx.AppServer.Protocol.Generated.V2.TurnStartParams},
     "turn/steer" => %{params_module: CodexEx.AppServer.Protocol.Generated.V2.TurnSteerParams},

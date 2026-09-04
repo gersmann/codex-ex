@@ -11,6 +11,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.TurnStartParams do
     :client_user_message_id,
     :collaboration_mode,
     :cwd,
+    :cyber_access_program,
     :effort,
     :environments,
     :input,
@@ -23,8 +24,11 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.TurnStartParams do
     :runtime_workspace_roots,
     :sandbox_policy,
     :service_tier,
+    :service_tier_for_turn,
     :summary,
-    :thread_id
+    :thread_id,
+    :tool_output,
+    :turn_trigger
   ]
 
   @field_specs [
@@ -59,6 +63,12 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.TurnStartParams do
       wire_key: "collaborationMode"
     },
     %{spec: {:nullable, :plain}, field: :cwd, required: false, wire_key: "cwd"},
+    %{
+      spec: {:nullable, :plain},
+      field: :cyber_access_program,
+      required: false,
+      wire_key: "cyberAccessProgram"
+    },
     %{spec: {:nullable, :plain}, field: :effort, required: false, wire_key: "effort"},
     %{
       spec: {:nullable, {:array, {:module, Module.concat(__MODULE__, "TurnEnvironmentParams")}}},
@@ -96,8 +106,21 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.TurnStartParams do
       wire_key: "sandboxPolicy"
     },
     %{spec: {:nullable, :plain}, field: :service_tier, required: false, wire_key: "serviceTier"},
+    %{
+      spec: {:nullable, :plain},
+      field: :service_tier_for_turn,
+      required: false,
+      wire_key: "serviceTierForTurn"
+    },
     %{spec: {:nullable, :plain}, field: :summary, required: false, wire_key: "summary"},
-    %{spec: :plain, field: :thread_id, required: true, wire_key: "threadId"}
+    %{spec: :plain, field: :thread_id, required: true, wire_key: "threadId"},
+    %{
+      spec: {:nullable, {:module, Module.concat(__MODULE__, "TurnToolOutput")}},
+      field: :tool_output,
+      required: false,
+      wire_key: "toolOutput"
+    },
+    %{spec: {:nullable, :plain}, field: :turn_trigger, required: false, wire_key: "turnTrigger"}
   ]
 
   def decode(payload) when is_map(payload) do
@@ -254,6 +277,28 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.TurnStartParams do
         required: false,
         wire_key: "runtimeWorkspaceRoots"
       }
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
+  defmodule TurnToolOutput do
+    @moduledoc false
+
+    defstruct [:name, :namespace, :output]
+
+    @field_specs [
+      %{spec: :plain, field: :name, required: true, wire_key: "name"},
+      %{spec: {:nullable, :plain}, field: :namespace, required: false, wire_key: "namespace"},
+      %{spec: :plain, field: :output, required: true, wire_key: "output"}
     ]
 
     def decode(payload) when is_map(payload) do

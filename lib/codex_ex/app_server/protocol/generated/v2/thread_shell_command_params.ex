@@ -3,11 +3,12 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadShellCommandParams do
 
   alias CodexEx.AppServer.Protocol.Codec
 
-  defstruct [:command, :thread_id]
+  defstruct [:command, :thread_id, :timeout_ms]
 
   @field_specs [
     %{spec: :plain, field: :command, required: true, wire_key: "command"},
-    %{spec: :plain, field: :thread_id, required: true, wire_key: "threadId"}
+    %{spec: :plain, field: :thread_id, required: true, wire_key: "threadId"},
+    %{spec: {:nullable, :plain}, field: :timeout_ms, required: false, wire_key: "timeoutMs"}
   ]
 
   def decode(payload) when is_map(payload) do

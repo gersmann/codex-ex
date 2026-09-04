@@ -11,6 +11,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadListParams do
     :limit,
     :model_providers,
     :parent_thread_id,
+    :project_id,
     :search_term,
     :section_id,
     :sort_direction,
@@ -42,6 +43,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadListParams do
       required: false,
       wire_key: "parentThreadId"
     },
+    %{spec: {:nullable, :plain}, field: :project_id, required: false, wire_key: "projectId"},
     %{spec: {:nullable, :plain}, field: :search_term, required: false, wire_key: "searchTerm"},
     %{spec: {:nullable, :plain}, field: :section_id, required: false, wire_key: "sectionId"},
     %{

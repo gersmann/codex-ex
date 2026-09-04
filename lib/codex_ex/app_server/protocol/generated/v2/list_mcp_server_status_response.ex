@@ -61,6 +61,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ListMcpServerStatusResponse do
       :plugin_id,
       :resource_templates,
       :resources,
+      :runtime_status,
       :server_info,
       :tools
     ]
@@ -80,6 +81,12 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ListMcpServerStatusResponse do
         field: :resources,
         required: true,
         wire_key: "resources"
+      },
+      %{
+        spec: {:nullable, :plain},
+        field: :runtime_status,
+        required: false,
+        wire_key: "runtimeStatus"
       },
       %{
         spec: {:nullable, {:module, Module.concat(ParentModule, "McpServerInfo")}},

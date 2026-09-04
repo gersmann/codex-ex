@@ -9,9 +9,11 @@ defmodule CodexEx.AppServer.Message do
   alias CodexEx.AppServer.Protocol.Generated.Shared.ExecCommandApprovalResponse
   alias CodexEx.AppServer.Protocol.Generated.Shared.FileChangeRequestApprovalResponse
   alias CodexEx.AppServer.Protocol.Generated.Shared.McpServerElicitationRequestResponse
+  alias CodexEx.AppServer.Protocol.Generated.Shared.PermissionsRequestApprovalResponse
   alias CodexEx.AppServer.Protocol.Generated.Shared.ServerNotification
   alias CodexEx.AppServer.Protocol.Generated.Shared.ServerRequest
   alias CodexEx.AppServer.Protocol.Generated.Shared.ToolRequestUserInputResponse
+
   alias CodexEx.AppServer.Protocol.Generated.Shared.ToolRequestUserInputResponse.ToolRequestUserInputAnswer
 
   alias CodexEx.AppServer.Protocol.Generated.V2.HookCompletedNotification.HookRunSummary,
@@ -43,8 +45,10 @@ defmodule CodexEx.AppServer.Message do
           | %ExecCommandApprovalResponse{}
           | %FileChangeRequestApprovalResponse{}
           | %ApplyPatchApprovalResponse{}
+          | %PermissionsRequestApprovalResponse{}
   @type hook_run_result :: {:ok, map()} | {:error, term()}
-  @dialyzer {:nowarn_function, [resolved_request_id: 1, extract_text_delta: 1, extract_turn_diff: 1]}
+  @dialyzer {:nowarn_function,
+             [resolved_request_id: 1, extract_text_delta: 1, extract_turn_diff: 1]}
 
   @spec method_name(term()) :: binary() | nil
   def method_name(%ServerNotification{method: method}), do: method
@@ -66,7 +70,8 @@ defmodule CodexEx.AppServer.Message do
 
   @spec encode_reply_payload(term()) ::
           {:ok, map()} | {:error, {:unsupported_request_reply_payload, term()}}
-  def encode_reply_payload(%ToolRequestUserInputResponse{answers: answers} = payload) when is_map(answers) do
+  def encode_reply_payload(%ToolRequestUserInputResponse{answers: answers} = payload)
+      when is_map(answers) do
     if Enum.all?(answers, fn {_id, answer} ->
          match?(%ToolRequestUserInputAnswer{}, answer)
        end) do
@@ -98,6 +103,9 @@ defmodule CodexEx.AppServer.Message do
 
   def encode_reply_payload(%ApplyPatchApprovalResponse{} = payload),
     do: encoded_reply(ApplyPatchApprovalResponse.encode(payload))
+
+  def encode_reply_payload(%PermissionsRequestApprovalResponse{} = payload),
+    do: encoded_reply(PermissionsRequestApprovalResponse.encode(payload))
 
   def encode_reply_payload(payload), do: {:error, {:unsupported_request_reply_payload, payload}}
 
@@ -293,9 +301,11 @@ defmodule CodexEx.AppServer.Message do
   defp fetch_param(%{} = params, key), do: ProtocolValue.fetch(params, key)
   defp fetch_param(_params, _key), do: :error
 
-  defp encode_hook_run(%StartedHookRunSummary{} = run), do: {:ok, StartedHookRunSummary.encode(run)}
+  defp encode_hook_run(%StartedHookRunSummary{} = run),
+    do: {:ok, StartedHookRunSummary.encode(run)}
 
-  defp encode_hook_run(%CompletedHookRunSummary{} = run), do: {:ok, CompletedHookRunSummary.encode(run)}
+  defp encode_hook_run(%CompletedHookRunSummary{} = run),
+    do: {:ok, CompletedHookRunSummary.encode(run)}
 
   defp encode_hook_run(run) do
     case ProtocolValue.to_json_value(run) do
@@ -306,7 +316,8 @@ defmodule CodexEx.AppServer.Message do
   end
 
   defp hook_run_item_key(%{} = hook_run) do
-    case {Map.get(hook_run, "eventName"), Map.get(hook_run, "displayOrder"), Map.get(hook_run, "sourcePath")} do
+    case {Map.get(hook_run, "eventName"), Map.get(hook_run, "displayOrder"),
+          Map.get(hook_run, "sourcePath")} do
       {event_name, display_order, source_path}
       when is_binary(event_name) and event_name != "" and is_integer(display_order) and
              is_binary(source_path) and source_path != "" ->

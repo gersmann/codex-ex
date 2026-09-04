@@ -3,7 +3,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadMetadataUpdateParams do
 
   alias CodexEx.AppServer.Protocol.Codec
 
-  defstruct [:git_info, :thread_id]
+  defstruct [:git_info, :project_id, :thread_id]
 
   @field_specs [
     %{
@@ -12,6 +12,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadMetadataUpdateParams do
       required: false,
       wire_key: "gitInfo"
     },
+    %{spec: {:nullable, :plain}, field: :project_id, required: false, wire_key: "projectId"},
     %{spec: :plain, field: :thread_id, required: true, wire_key: "threadId"}
   ]
 
