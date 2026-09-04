@@ -3,8 +3,8 @@ defmodule CodexEx.AppServer.ThreadSettings do
   Effective Codex settings observed for a loaded thread.
 
   App-created threads retain the private instruction seed needed to replay the
-  settings exactly. Legacy resumes still expose their effective settings to the
-  runtime, but are not replayable into a fork.
+  settings exactly. Imported threads expose effective settings without a private
+  instruction seed; their fork leaves developer instructions to Codex.
   """
 
   alias CodexEx.AppServer.Protocol.Generated.V2.ThreadSettingsUpdatedNotification
@@ -180,10 +180,9 @@ defmodule CodexEx.AppServer.ThreadSettings do
     end
   end
 
-  @doc "Returns exact thread/fork overrides with side-chat developer constraints appended."
-  @spec side_fork_overrides(t(), binary()) :: {:ok, map()} | {:error, :settings_unavailable}
-  def side_fork_overrides(%__MODULE__{replayable?: true} = settings, side_instructions)
-      when is_binary(side_instructions) and side_instructions != "" do
+  @doc "Returns side-chat fork settings without replacing unknown parent instructions."
+  @spec side_fork_overrides(t()) :: {:ok, map()} | {:error, :settings_unavailable}
+  def side_fork_overrides(%__MODULE__{} = settings) do
     with {:ok, permission_overrides, permission_config} <- fork_permission_settings(settings) do
       config =
         %{}
@@ -198,7 +197,6 @@ defmodule CodexEx.AppServer.ThreadSettings do
             "approvalPolicy" => settings.approval_policy,
             "approvalsReviewer" => settings.approvals_reviewer,
             "cwd" => settings.cwd,
-            "developerInstructions" => append_instructions(settings.developer_instructions, side_instructions),
             "ephemeral" => true,
             "model" => settings.model,
             "modelProvider" => settings.model_provider,
@@ -208,11 +206,14 @@ defmodule CodexEx.AppServer.ThreadSettings do
           permission_overrides
         )
 
+      overrides =
+        if settings.replayable?,
+          do: Map.put(overrides, "developerInstructions", settings.developer_instructions),
+          else: overrides
+
       {:ok, if(map_size(config) == 0, do: overrides, else: Map.put(overrides, "config", config))}
     end
   end
-
-  def side_fork_overrides(%__MODULE__{}, _side_instructions), do: {:error, :settings_unavailable}
 
   defp validated_settings(%__MODULE__{} = settings) do
     with {:ok, profile_id} <- validate_optional_binary(settings.active_permission_profile_id),
@@ -324,11 +325,6 @@ defmodule CodexEx.AppServer.ThreadSettings do
 
   defp put_optional(map, _key, nil), do: map
   defp put_optional(map, key, value), do: Map.put(map, key, value)
-
-  defp append_instructions(nil, side_instructions), do: side_instructions
-
-  defp append_instructions(developer_instructions, side_instructions),
-    do: developer_instructions <> "\n\n" <> side_instructions
 
   defp seed_config(nil, seed), do: seed_config(%{}, seed)
 

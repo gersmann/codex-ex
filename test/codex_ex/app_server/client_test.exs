@@ -680,7 +680,7 @@ defmodule CodexEx.AppServer.ClientTest do
         }
     }
 
-    assert {:ok, overrides} = ThreadSettings.side_fork_overrides(settings, "Side constraints")
+    assert {:ok, overrides} = ThreadSettings.side_fork_overrides(settings)
     assert overrides["sandbox"] == "workspace-write"
     refute Map.has_key?(overrides, "permissions")
 
@@ -697,7 +697,7 @@ defmodule CodexEx.AppServer.ClientTest do
            }
 
     named_settings = %{settings | active_permission_profile_id: ":workspace"}
-    assert {:ok, named_overrides} = ThreadSettings.side_fork_overrides(named_settings, "Side")
+    assert {:ok, named_overrides} = ThreadSettings.side_fork_overrides(named_settings)
     assert named_overrides["permissions"] == ":workspace"
     refute Map.has_key?(named_overrides, "sandbox")
   end
@@ -772,7 +772,10 @@ defmodule CodexEx.AppServer.ClientTest do
     assert settings.reasoning_effort == "medium"
     refute settings.replayable?
     assert ThreadSettings.persisted_seed(settings) == nil
-    assert {:error, :settings_unavailable} = ThreadSettings.side_fork_overrides(settings, "side")
+    assert {:ok, overrides} = ThreadSettings.side_fork_overrides(settings)
+    refute Map.has_key?(overrides, "developerInstructions")
+    assert overrides["model"] == settings.model
+    assert overrides["approvalPolicy"] == settings.approval_policy
 
     assert_receive {:mock_thread_resume,
                     %{
