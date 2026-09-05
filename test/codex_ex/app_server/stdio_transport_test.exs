@@ -54,8 +54,8 @@ defmodule CodexEx.AppServer.StdioTransportTest do
     assert_receive :proxy_handshake_complete, @transport_timeout_ms
     assert_receive {^transport, {:transport_data, "early\n"}}, @transport_timeout_ms
 
-    assert :ok = StdioTransport.send(transport, "request\n")
-    assert_receive {:proxy_received, "request"}, @transport_timeout_ms
+    assert :ok = StdioTransport.send(transport, %{"method" => "request"})
+    assert_receive {:proxy_received, ~s({"method":"request"})}, @transport_timeout_ms
     assert_receive {^transport, {:transport_data, "response\n"}}, @transport_timeout_ms
     assert :ok = StdioTransport.close(transport)
 

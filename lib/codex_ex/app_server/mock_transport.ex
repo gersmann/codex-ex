@@ -62,7 +62,7 @@ defmodule CodexEx.AppServer.MockTransport do
   end
 
   @impl Transport
-  def send(mock_pid, payload) when is_pid(mock_pid) and is_binary(payload) do
+  def send(mock_pid, payload) when is_pid(mock_pid) and is_map(payload) do
     GenServer.cast(mock_pid, {:incoming, payload})
     :ok
   end
@@ -71,6 +71,8 @@ defmodule CodexEx.AppServer.MockTransport do
   def close(_mock_pid), do: :ok
 
   @impl Transport
+  def normalize_message({:mock_message, message}, _handle) when is_map(message), do: {:message, message}
+  # Raw bytes are only used by malformed-JSON fault injection.
   def normalize_message({:mock_data, data}, _handle) when is_binary(data), do: {:data, data}
   def normalize_message({:mock_closed, reason}, _handle), do: {:closed, reason}
   def normalize_message(_message, _handle), do: :ignore
@@ -128,11 +130,11 @@ defmodule CodexEx.AppServer.MockTransport do
 
   @impl GenServer
   def handle_cast({:incoming, payload}, state) do
-    case payload |> String.trim() |> Jason.decode() do
-      {:ok, %{"id" => _id, "method" => _method} = message} ->
+    case payload do
+      %{"id" => _id, "method" => _method} = message ->
         {:noreply, handle_request(message, state)}
 
-      {:ok, %{"method" => "initialized"} = _message} ->
+      %{"method" => "initialized"} ->
         emit(state, notification("session/initialized", %{}))
 
         if Map.get(state.config, :config_warning) do
@@ -141,7 +143,7 @@ defmodule CodexEx.AppServer.MockTransport do
 
         {:noreply, state}
 
-      {:ok, %{"id" => _id} = message} ->
+      %{"id" => _id} = message ->
         # This is a response to a server-initiated request (e.g., user input reply)
         if notify = Map.get(state.config, :notify) do
           Kernel.send(notify, {:mock_server_request_reply, message})
@@ -149,10 +151,7 @@ defmodule CodexEx.AppServer.MockTransport do
 
         {:noreply, handle_server_request_reply(message, state)}
 
-      {:ok, _other} ->
-        {:noreply, state}
-
-      {:error, _reason} ->
+      _other ->
         {:noreply, state}
     end
   end
@@ -1050,8 +1049,7 @@ defmodule CodexEx.AppServer.MockTransport do
 
     spawn(fn ->
       Process.sleep(delay_ms)
-      json = Jason.encode!(result(id, %{"slow" => true}))
-      if is_pid(owner), do: Kernel.send(owner, {:mock_data, json <> "\n"})
+      if is_pid(owner), do: Kernel.send(owner, {:mock_message, result(id, %{"slow" => true})})
     end)
 
     state
@@ -2053,8 +2051,7 @@ defmodule CodexEx.AppServer.MockTransport do
         do: Map.delete(message, "jsonrpc"),
         else: message
 
-    json = Jason.encode!(message)
-    Kernel.send(owner, {:mock_data, json <> "\n"})
+    Kernel.send(owner, {:mock_message, message})
     :ok
   end
 

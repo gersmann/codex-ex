@@ -150,6 +150,40 @@ defmodule CodexEx.AppServer.SessionTest do
              Session.request(session, "emit_invalid_json", %{}, 5_000)
   end
 
+  test "native messages reject invalid envelopes before dispatch", %{mock: mock} do
+    for {payload, reason} <- [
+          {%{"jsonrpc" => "1.0", "method" => "invalid"}, :invalid_jsonrpc_version},
+          {%{"method" => 42}, {:unexpected_payload, %{"method" => 42}}}
+        ] do
+      session = start_supervised!({Session, [transport: MockTransport, mock_pid: mock]})
+      ref = Process.monitor(session)
+      send(session, {:mock_message, payload})
+      assert_receive {:DOWN, ^ref, :process, ^session, {:protocol_error, ^reason}}
+      stop_supervised!(Session)
+    end
+  end
+
+  test "byte transports preserve malformed JSON and non-object rejection" do
+    for {bytes, expected} <- [
+          {"{not-json}\n", :malformed},
+          {"[]\n", {:invalid_payload, {:ok, []}}}
+        ] do
+      session = start_supervised!({Session, [transport: StdioTransport, executable: "cat", args: []]})
+      ref = Process.monitor(session)
+      assert Port.command(:sys.get_state(session).transport, bytes)
+      assert_receive {:DOWN, ^ref, :process, ^session, {:protocol_error, reason}}
+      if expected == :malformed, do: assert(is_struct(reason, Jason.DecodeError)), else: assert(reason == expected)
+      stop_supervised!(Session)
+    end
+  end
+
+  test "byte transport encoding failures do not consume a request id" do
+    session = start_supervised!({Session, [transport: StdioTransport, executable: "cat", args: []]})
+    assert {:error, {:encode_failed, _reason}} = Session.request(session, "echo", %{"invalid" => self()})
+    assert :sys.get_state(session).next_id == 1
+    assert :sys.get_state(session).pending == %{}
+  end
+
   test "returns a clear startup error for missing executable" do
     previous = Process.flag(:trap_exit, true)
 

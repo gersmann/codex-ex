@@ -335,19 +335,23 @@ defmodule CodexEx.AppServer.Session do
     |> handle_normalized_message(message, state)
   end
 
-  defp handle_normalized_message({:data, data}, _message, state), do: handle_transport_data(state, data, nil)
+  defp handle_normalized_message({:data, data}, _message, state),
+    do: finish_transport_message(consume_data(state, data), nil)
 
-  defp handle_normalized_message({:data, _data, sequence}, _message, state)
+  defp handle_normalized_message({:message, payload}, _message, state),
+    do: finish_transport_message(consume_payload(state, payload, nil), nil)
+
+  defp handle_normalized_message({:message, _payload, sequence}, _message, state)
        when is_integer(sequence) and sequence >= 0 and sequence <= state.last_acknowledged_transport_sequence,
        do: {:noreply, schedule_transport_ack(state, sequence)}
 
-  defp handle_normalized_message({:data, data, sequence}, _message, state)
+  defp handle_normalized_message({:message, payload, sequence}, _message, state)
        when is_integer(sequence) and sequence >= 0 and
               (sequence <= state.last_transport_sequence or sequence == state.last_transport_sequence + 1),
-       do: handle_transport_data(state, data, sequence)
+       do: finish_transport_message(consume_payload(state, payload, sequence), sequence)
 
-  defp handle_normalized_message({:data, _data, sequence}, _message, state) when is_integer(sequence) and sequence >= 0,
-    do: stop_for_transport_sequence_gap(state, sequence)
+  defp handle_normalized_message({:message, _payload, sequence}, _message, state)
+       when is_integer(sequence) and sequence >= 0, do: stop_for_transport_sequence_gap(state, sequence)
 
   defp handle_normalized_message(
          {:replay_gap, %{"missing_through_sequence" => through_sequence} = payload},
@@ -423,22 +427,15 @@ defmodule CodexEx.AppServer.Session do
   def terminate(_reason, _state), do: :ok
 
   defp send_payload(state, payload) do
-    case Jason.encode(normalize_outgoing_payload(payload)) do
-      {:ok, json} -> state.transport_module.send(state.transport, json <> "\n")
-      {:error, reason} -> {:error, {:encode_failed, reason}}
-    end
+    state.transport_module.send(state.transport, normalize_outgoing_payload(payload))
   end
 
-  defp handle_transport_data(state, data, sequence) do
-    case consume_data(state, data, sequence) do
-      {:ok, new_state} ->
-        {:noreply, record_transport_sequence(new_state, sequence)}
+  defp finish_transport_message({:ok, state}, sequence), do: {:noreply, record_transport_sequence(state, sequence)}
 
-      {:error, reason, new_state} ->
-        :ok = new_state.transport_module.close(new_state.transport)
-        new_state = reply_all_pending(new_state, {:error, {:protocol_error, reason}})
-        {:stop, {:protocol_error, reason}, new_state}
-    end
+  defp finish_transport_message({:error, reason, state}, _sequence) do
+    :ok = state.transport_module.close(state.transport)
+    state = reply_all_pending(state, {:error, {:protocol_error, reason}})
+    {:stop, {:protocol_error, reason}, state}
   end
 
   defp record_transport_sequence(state, nil), do: state
@@ -509,12 +506,12 @@ defmodule CodexEx.AppServer.Session do
 
   defp normalize_outgoing_payload(payload), do: payload
 
-  defp consume_data(state, data, sequence) do
+  defp consume_data(state, data) do
     {lines, buffer} = split_complete_lines(state.buffer <> data)
     state = %{state | buffer: buffer}
 
     Enum.reduce_while(lines, {:ok, state}, fn line, {:ok, acc_state} ->
-      case handle_line(acc_state, line, sequence) do
+      case handle_line(acc_state, line) do
         {:ok, next_state} ->
           {:cont, {:ok, next_state}}
 
@@ -529,25 +526,27 @@ defmodule CodexEx.AppServer.Session do
     {lines, rest}
   end
 
-  defp handle_line(state, raw_line, sequence) do
+  defp handle_line(state, raw_line) do
     line = String.trim_trailing(raw_line, "\r")
 
     if line == "" do
       {:ok, state}
     else
-      decode_and_handle_line(state, line, sequence)
+      case Jason.decode(line) do
+        {:ok, payload} -> consume_payload(state, payload, nil)
+        {:error, reason} -> {:error, reason, state}
+      end
     end
   end
 
-  defp decode_and_handle_line(state, line, sequence) do
-    with {:ok, payload} when is_map(payload) <- Jason.decode(line),
-         :ok <- validate_jsonrpc(payload) do
-      handle_rpc_payload(state, payload, sequence)
-    else
+  defp consume_payload(state, payload, sequence) when is_map(payload) do
+    case validate_jsonrpc(payload) do
+      :ok -> handle_rpc_payload(state, payload, sequence)
       {:error, reason} -> {:error, reason, state}
-      error -> {:error, {:invalid_payload, error}, state}
     end
   end
+
+  defp consume_payload(state, payload, _sequence), do: {:error, {:invalid_payload, {:ok, payload}}, state}
 
   defp validate_jsonrpc(%{"jsonrpc" => @jsonrpc_version}), do: :ok
   defp validate_jsonrpc(%{} = payload) when not is_map_key(payload, "jsonrpc"), do: :ok
@@ -638,7 +637,7 @@ defmodule CodexEx.AppServer.Session do
 
         sequence <= state.last_transport_sequence or
             sequence == state.last_transport_sequence + 1 ->
-          case consume_data(state, Jason.encode!(message) <> "\n", sequence) do
+          case consume_payload(state, message, sequence) do
             {:ok, state} -> {:cont, {:ok, record_transport_sequence(state, sequence)}}
             {:error, reason, state} -> {:halt, {:error, reason, state}}
           end
@@ -654,7 +653,7 @@ defmodule CodexEx.AppServer.Session do
 
   defp consume_pending_requests(state, pending_requests) do
     Enum.reduce_while(pending_requests, {:ok, state}, fn {_sequence, message}, {:ok, state} ->
-      case consume_data(state, Jason.encode!(message) <> "\n", nil) do
+      case consume_payload(state, message, nil) do
         {:ok, state} -> {:cont, {:ok, state}}
         {:error, reason, state} -> {:halt, {:error, reason, state}}
       end

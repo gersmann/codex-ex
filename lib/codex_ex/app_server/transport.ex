@@ -6,14 +6,24 @@ defmodule CodexEx.AppServer.Transport do
   @type close_reason :: term()
   @type normalized_message ::
           {:data, binary()}
-          | {:data, binary(), non_neg_integer()}
+          | {:message, map()}
+          | {:message, map(), non_neg_integer()}
           | {:closed, close_reason()}
           | {:closed, close_reason(), non_neg_integer()}
           | {:replay_gap, map()}
           | :ignore
 
+  @doc "Encodes an RPC object for newline-delimited byte transports."
+  @spec encode(map()) :: {:ok, binary()} | {:error, {:encode_failed, term()}}
+  def encode(message) when is_map(message) do
+    case Jason.encode(message) do
+      {:ok, json} -> {:ok, json <> "\n"}
+      {:error, reason} -> {:error, {:encode_failed, reason}}
+    end
+  end
+
   @callback open(keyword()) :: {:ok, handle()} | {:error, open_error()}
-  @callback send(handle(), binary()) :: :ok | {:error, term()}
+  @callback send(handle(), map()) :: :ok | {:error, term()}
   @callback close(handle()) :: :ok
   @callback normalize_message(term(), handle()) :: normalized_message()
 

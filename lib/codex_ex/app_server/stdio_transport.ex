@@ -4,6 +4,7 @@ defmodule CodexEx.AppServer.StdioTransport do
   @behaviour CodexEx.AppServer.Transport
 
   alias CodexEx.AppServer.StdioProxyTransport
+  alias CodexEx.AppServer.Transport
 
   require Logger
 
@@ -23,13 +24,15 @@ defmodule CodexEx.AppServer.StdioTransport do
     end
   end
 
-  def send(transport, payload) when is_pid(transport) and is_binary(payload),
+  def send(transport, payload) when is_pid(transport) and is_map(payload),
     do: StdioProxyTransport.send(transport, payload)
 
-  @spec send(port() | pid(), binary()) :: :ok | {:error, :closed}
-  def send(port, payload) when is_port(port) and is_binary(payload) do
-    true = Port.command(port, payload)
-    :ok
+  @spec send(port() | pid(), map()) :: :ok | {:error, :closed | {:encode_failed, term()}}
+  def send(port, message) when is_port(port) and is_map(message) do
+    with {:ok, payload} <- Transport.encode(message) do
+      true = Port.command(port, payload)
+      :ok
+    end
   rescue
     ArgumentError -> {:error, :closed}
   end
@@ -45,7 +48,7 @@ defmodule CodexEx.AppServer.StdioTransport do
   end
 
   @spec normalize_message(term(), term()) ::
-          CodexEx.AppServer.Transport.normalized_message()
+          Transport.normalized_message()
   def normalize_message({port, {:data, data}}, port) when is_binary(data), do: {:data, data}
   def normalize_message({port, {:exit_status, exit_status}}, port), do: {:closed, exit_status}
 

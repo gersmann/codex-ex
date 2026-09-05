@@ -5,6 +5,7 @@ defmodule CodexEx.AppServer.WebSocketTransport do
 
   use GenServer
 
+  alias CodexEx.AppServer.Transport
   alias CodexEx.AppServer.WebSocketFrames
 
   @default_handshake_timeout 5_000
@@ -42,11 +43,10 @@ defmodule CodexEx.AppServer.WebSocketTransport do
   end
 
   @impl true
-  @spec send(pid(), binary()) :: :ok | {:error, :closed}
-  def send(transport, payload) when is_pid(transport) and is_binary(payload) do
-    case GenServer.call(transport, {:send, payload}) do
-      :ok -> :ok
-      {:error, :closed} = error -> error
+  @spec send(pid(), map()) :: :ok | {:error, :closed | {:encode_failed, term()}}
+  def send(transport, message) when is_pid(transport) and is_map(message) do
+    with {:ok, payload} <- Transport.encode(message) do
+      GenServer.call(transport, {:send, payload})
     end
   catch
     :exit, _reason -> {:error, :closed}
@@ -63,7 +63,7 @@ defmodule CodexEx.AppServer.WebSocketTransport do
 
   @impl true
   @spec normalize_message(term(), term()) ::
-          CodexEx.AppServer.Transport.normalized_message()
+          Transport.normalized_message()
   def normalize_message({transport, {:transport_data, data}}, transport) when is_pid(transport) and is_binary(data) do
     {:data, data}
   end

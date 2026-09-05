@@ -27,11 +27,10 @@ defmodule CodexEx.AppServer.StdioProxyTransport do
   def open(opts), do: GenServer.start(__MODULE__, opts)
 
   @impl true
-  @spec send(pid(), binary()) :: :ok | {:error, :closed}
-  def send(transport, payload) when is_pid(transport) and is_binary(payload) do
-    case GenServer.call(transport, {:send, payload}) do
-      :ok -> :ok
-      {:error, :closed} = error -> error
+  @spec send(pid(), map()) :: :ok | {:error, :closed | {:encode_failed, term()}}
+  def send(transport, message) when is_pid(transport) and is_map(message) do
+    with {:ok, payload} <- CodexEx.AppServer.Transport.encode(message) do
+      GenServer.call(transport, {:send, payload})
     end
   catch
     :exit, _reason -> {:error, :closed}
