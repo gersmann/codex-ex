@@ -9,7 +9,7 @@ pooling, and a fully code-generated protocol binding.
 ```elixir
 def deps do
   [
-    {:codex_ex, "~> 0.1"}
+    {:codex_ex, "~> 0.2.0"}
   ]
 end
 ```
