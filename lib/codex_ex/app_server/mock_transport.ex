@@ -26,8 +26,8 @@ defmodule CodexEx.AppServer.MockTransport do
   alias CodexEx.AppServer.Transport
 
   @mock_fuzzy_file_paths [
-    "lib/app/runtime/agents/codex_session_adapter.ex",
-    "test/app/runtime/agents/codex_session_adapter_test.exs",
+    "lib/app/runtime/execution/codex_session_adapter.ex",
+    "test/app/runtime/execution/codex_session_adapter/local_test.exs",
     "_build_codex_test/lib/app/consolidated/Elixir.Ash.Scope.ToOpts.beam"
   ]
 

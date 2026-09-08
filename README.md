@@ -671,7 +671,7 @@ monitor and replaced on the next request.
 ### Stale Client Recovery
 
 Host applications typically wrap thread operations with a stale-client
-retry (see `App.Runtime.Agents.SessionRemoteThreadOps.with_stale_client_retry/5`
+retry (see `App.Runtime.Execution.SessionRemoteThreadOps.with_stale_client_retry/5`
 in the reference host): if the initial attempt returns a stale-session error,
 reconnect with a fresh client and retry once.
 
