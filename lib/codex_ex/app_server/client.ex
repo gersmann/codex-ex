@@ -10,6 +10,8 @@ defmodule CodexEx.AppServer.Client do
   use GenServer
 
   alias CodexEx.AppServer.Message
+  alias CodexEx.AppServer.Protocol.Generated.Shared.FuzzyFileSearchParams
+  alias CodexEx.AppServer.Protocol.Generated.Shared.FuzzyFileSearchResponse
   alias CodexEx.AppServer.Protocol.Generated.Shared.FuzzyFileSearchSessionStartParams
   alias CodexEx.AppServer.Protocol.Generated.Shared.FuzzyFileSearchSessionStartResponse
   alias CodexEx.AppServer.Protocol.Generated.Shared.FuzzyFileSearchSessionStopParams
@@ -121,6 +123,7 @@ defmodule CodexEx.AppServer.Client do
     config_batch_write: {"config/batchWrite", ConfigWriteResponse},
     experimental_feature_enablement_set: {"experimentalFeature/enablement/set", ExperimentalFeatureEnablementSetResponse},
     experimental_feature_list: {"experimentalFeature/list", ExperimentalFeatureListResponse},
+    fuzzy_file_search: {"fuzzyFileSearch", FuzzyFileSearchResponse},
     fuzzy_file_search_session_start: {"fuzzyFileSearch/sessionStart", FuzzyFileSearchSessionStartResponse},
     fuzzy_file_search_session_stop: {"fuzzyFileSearch/sessionStop", FuzzyFileSearchSessionStopResponse},
     fuzzy_file_search_session_update: {"fuzzyFileSearch/sessionUpdate", FuzzyFileSearchSessionUpdateResponse},
@@ -490,6 +493,19 @@ defmodule CodexEx.AppServer.Client do
       call_timeout_for(@default_timeout)
     )
     |> normalize_thread_list_result()
+  end
+
+  @doc "Searches workspace roots without creating a thread or a search session."
+  @spec fuzzy_file_search(t(), binary(), [binary()]) ::
+          {:ok, %FuzzyFileSearchResponse{}} | {:error, term()}
+  def fuzzy_file_search(client, query, roots) when is_binary(query) and is_list(roots) do
+    client
+    |> client_server()
+    |> safe_client_call(
+      {:fuzzy_file_search, %FuzzyFileSearchParams{query: query, roots: roots}, @default_timeout},
+      call_timeout_for(@default_timeout)
+    )
+    |> normalize_struct_result(FuzzyFileSearchResponse)
   end
 
   @spec start_fuzzy_file_search_session(t(), binary(), [binary()]) ::

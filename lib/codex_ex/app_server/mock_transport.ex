@@ -957,6 +957,23 @@ defmodule CodexEx.AppServer.MockTransport do
     state
   end
 
+  defp handle_method("fuzzyFileSearch", id, %{"query" => query, "roots" => [root]}, state) do
+    files =
+      Enum.map(fuzzy_file_search_results(query), fn path ->
+        %{
+          "root" => root,
+          "path" => path,
+          "file_name" => Path.basename(path),
+          "match_type" => "file",
+          "score" => 1,
+          "indices" => nil
+        }
+      end)
+
+    emit(state, result(id, %{"files" => files}))
+    state
+  end
+
   defp handle_method("fuzzyFileSearch/sessionStart", id, params, state) do
     session_id = Map.get(params, "sessionId")
     roots = Map.get(params, "roots", [])

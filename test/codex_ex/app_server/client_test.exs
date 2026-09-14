@@ -1139,6 +1139,18 @@ defmodule CodexEx.AppServer.ClientTest do
     assert enabled_hook.enabled == true
   end
 
+  test "one-shot fuzzy file search returns typed paths without creating sessions", %{mock: mock} do
+    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
+
+    assert {:ok, %{files: [file | _]}} = Client.fuzzy_file_search(client, "lib/ap", ["/tmp/mock-codex"])
+    assert file.root == "/tmp/mock-codex"
+    assert file.path == "lib/app/runtime/execution/codex_session_adapter.ex"
+    assert %{threads: threads, fuzzy_sessions: sessions} = :sys.get_state(mock)
+    assert threads == %{}
+    assert sessions == %{}
+    assert {:ok, %{files: []}} = Client.fuzzy_file_search(client, "missing-file", ["/tmp/mock-codex"])
+  end
+
   test "fuzzy file search session wrappers use the generated protocol", %{
     mock: mock
   } do
