@@ -57,6 +57,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.AccountRateLimitsUpdatedNotifi
       :individual_limit,
       :limit_id,
       :limit_name,
+      :normal_model_slug,
       :plan_type,
       :primary,
       :rate_limit_reached_type,
@@ -79,6 +80,12 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.AccountRateLimitsUpdatedNotifi
       },
       %{spec: {:nullable, :plain}, field: :limit_id, required: false, wire_key: "limitId"},
       %{spec: {:nullable, :plain}, field: :limit_name, required: false, wire_key: "limitName"},
+      %{
+        spec: {:nullable, :plain},
+        field: :normal_model_slug,
+        required: false,
+        wire_key: "normalModelSlug"
+      },
       %{spec: {:nullable, :plain}, field: :plan_type, required: false, wire_key: "planType"},
       %{
         spec: {:nullable, {:module, Module.concat(ParentModule, "RateLimitWindow")}},

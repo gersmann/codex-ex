@@ -496,9 +496,13 @@ Full typed snapshot of thread state returned by the server.
 **Fields:** `id`, `name`, `status`, `cwd`, `preview`, `source`, `thread_source`,
 `cli_version`, `model_provider`, `ephemeral`, `created_at`, `updated_at`,
 `turns` (list of `Turn.t()`), `git_info` (`GitInfo.t()` | nil),
-`history_mode`, `agent_nickname`, `agent_role`, `path`.
+`history_mode`, `agent_nickname`, `agent_role`, `path`, `originator`,
+`environments`, `daybreak_enabled`.
 
 **Nested:** `ThreadSnapshot.GitInfo` — `%{branch, origin_url, sha}`.
+`ThreadSnapshot.Environment` — `%{environment_id, cwd, runtime_workspace_roots}`.
+Environment selections preserve unloaded (`nil`) versus empty (`[]`) values;
+these fields are metadata and do not select a workspace or enable Daybreak.
 
 #### `Turn`
 
@@ -588,8 +592,8 @@ conversion and `normalize_map/1` to strip struct metadata.
 
 #### `SchemaSnapshot`
 
-The committed schema and generated bindings were refreshed with `codex-cli 0.153.3`
-and `--experimental` on 2026-09-04 (416 schema files). This replaces the unversioned
+The committed schema and generated bindings were refreshed with `codex-cli 0.154.0`
+and `--experimental` on 2026-09-14 (426 schema files). This replaces the unversioned
 snapshot extracted in `f4e203e`; that earlier export did not record a CLI version.
 The release baseline is documented in the [official changelog](https://learn.chatgpt.com/docs/changelog).
 
@@ -603,6 +607,35 @@ Exports the JSON Schema from the `codex` CLI to
 4. Report file count
 
 Used as a development-time step before running `Protocol.Generator`.
+
+Run upgrades from the SDK directory:
+
+```bash
+codex --version
+mix codex.app_server.snapshot_schema
+mix codex.app_server.generate_protocol
+mix codex.app_server.verify_protocol
+```
+
+The deterministic verification task compares generated bindings with the pinned
+snapshot; it does not check the installed executable. After an upgrade, export
+again to a fresh temporary directory to check both relationships:
+
+```bash
+codex_schema_check=$(mktemp -d)
+mix codex.app_server.snapshot_schema --output "$codex_schema_check/schema"
+diff -rq priv/schema "$codex_schema_check/schema"
+mix codex.app_server.verify_protocol --schema-root "$codex_schema_check/schema"
+```
+
+Consumers using a local path dependency should refresh Dialyzer's dependency
+cache after updating the SDK: run `mix dialyzer --force-check --plt` in the
+consumer project. Its lockfile may not change when the SDK's types change.
+
+Nullable request structs preserve explicit `false` fields and encode `nil` as
+JSON `null`; omitted nullable params decode to `nil` as well. In particular,
+`supportsLunaReserve` must only be sent by a client implementing automatic
+fallback, not merely because the protocol now exposes the field.
 
 ---
 

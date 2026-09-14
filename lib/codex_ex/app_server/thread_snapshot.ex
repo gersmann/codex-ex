@@ -1,6 +1,9 @@
 defmodule CodexEx.AppServer.ThreadSnapshot do
   @moduledoc """
   Stable typed snapshot of an app-server thread.
+
+  `originator`, `environments`, and `daybreak_enabled` preserve server metadata.
+  A `nil` environment selection is unavailable; `[]` explicitly selects none.
   """
 
   alias CodexEx.AppServer.ProtocolValue
@@ -24,17 +27,32 @@ defmodule CodexEx.AppServer.ThreadSnapshot do
           }
   end
 
+  defmodule Environment do
+    @moduledoc false
+
+    defstruct [:cwd, :environment_id, :runtime_workspace_roots]
+
+    @type t :: %__MODULE__{
+            cwd: binary(),
+            environment_id: binary(),
+            runtime_workspace_roots: [binary()]
+          }
+  end
+
   defstruct [
     :agent_nickname,
     :agent_role,
     :cli_version,
     :created_at,
     :cwd,
+    :daybreak_enabled,
+    :environments,
     :ephemeral,
     :git_info,
     :id,
     :model_provider,
     :name,
+    :originator,
     :path,
     :preview,
     :source,
@@ -51,12 +69,15 @@ defmodule CodexEx.AppServer.ThreadSnapshot do
           cli_version: binary(),
           created_at: Types.timestamp(),
           cwd: binary(),
+          daybreak_enabled: boolean() | nil,
+          environments: [Environment.t()] | nil,
           ephemeral: boolean(),
           git_info: GitInfo.t() | nil,
           history_mode: binary(),
           id: binary(),
           model_provider: binary(),
           name: binary() | nil,
+          originator: binary() | nil,
           path: binary() | nil,
           preview: binary(),
           source: binary(),
@@ -85,10 +106,13 @@ defmodule CodexEx.AppServer.ThreadSnapshot do
          {:ok, cli_version} <- fetch_required_binary(thread, :cli_version),
          {:ok, created_at} <- fetch_required_timestamp(thread, :created_at),
          {:ok, cwd} <- fetch_required_binary(thread, :cwd),
+         {:ok, daybreak_enabled} <- fetch_optional_boolean(thread, :daybreak_enabled),
+         {:ok, environments} <- normalize_environments(ProtocolValue.get(thread, :environments)),
          {:ok, ephemeral} <- fetch_required_boolean(thread, :ephemeral),
          {:ok, git_info} <- normalize_git_info(ProtocolValue.get(thread, :git_info)),
          {:ok, history_mode} <- normalize_history_mode(ProtocolValue.get(thread, :history_mode)),
          {:ok, model_provider} <- fetch_required_binary(thread, :model_provider),
+         {:ok, originator} <- fetch_optional_binary(thread, :originator),
          {:ok, preview} <- fetch_required_binary(thread, :preview),
          {:ok, source} <- normalize_source(ProtocolValue.get(thread, :source)),
          {:ok, status} <- normalize_status(ProtocolValue.get(thread, :status)),
@@ -106,12 +130,15 @@ defmodule CodexEx.AppServer.ThreadSnapshot do
          cli_version: cli_version,
          created_at: created_at,
          cwd: cwd,
+         daybreak_enabled: daybreak_enabled,
+         environments: environments,
          ephemeral: ephemeral,
          git_info: git_info,
          history_mode: history_mode,
          id: id,
          model_provider: model_provider,
          name: name,
+         originator: originator,
          path: path,
          preview: preview,
          source: source,
@@ -184,6 +211,36 @@ defmodule CodexEx.AppServer.ThreadSnapshot do
 
   defp normalize_git_info(other), do: {:error, {:invalid_thread_snapshot, {:invalid_git_info, other}}}
 
+  @spec normalize_environments(term()) :: {:ok, [Environment.t()] | nil} | {:error, term()}
+  defp normalize_environments(nil), do: {:ok, nil}
+
+  defp normalize_environments(environments) when is_list(environments) do
+    environments
+    |> Enum.reduce_while({:ok, []}, fn environment, {:ok, acc} ->
+      case normalize_environment(environment) do
+        {:ok, parsed_environment} -> {:cont, {:ok, [parsed_environment | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, parsed_environments} -> {:ok, Enum.reverse(parsed_environments)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp normalize_environments(other), do: {:error, {:invalid_thread_snapshot, {:invalid_field, :environments, other}}}
+
+  @spec normalize_environment(term()) :: {:ok, Environment.t()} | {:error, term()}
+  defp normalize_environment(%{} = environment) do
+    with {:ok, cwd} <- fetch_required_binary(environment, :cwd),
+         {:ok, environment_id} <- fetch_required_binary(environment, :environment_id),
+         {:ok, roots} <- fetch_required_binary_list(environment, :runtime_workspace_roots) do
+      {:ok, %Environment{cwd: cwd, environment_id: environment_id, runtime_workspace_roots: roots}}
+    end
+  end
+
+  defp normalize_environment(other), do: {:error, {:invalid_thread_snapshot, {:invalid_environment, other}}}
+
   defp normalize_history_mode(nil), do: {:ok, "legacy"}
   defp normalize_history_mode(mode) when mode in ["legacy", "paginated"], do: {:ok, mode}
 
@@ -251,6 +308,31 @@ defmodule CodexEx.AppServer.ThreadSnapshot do
       {:ok, value} when is_boolean(value) -> {:ok, value}
       {:ok, value} -> {:error, {:invalid_thread_snapshot, {:invalid_field, field, value}}}
       :error -> {:error, {:invalid_thread_snapshot, {:missing_field, field}}}
+    end
+  end
+
+  @spec fetch_optional_boolean(map(), atom()) :: {:ok, boolean() | nil} | {:error, term()}
+  defp fetch_optional_boolean(map, field) do
+    case ProtocolValue.fetch(map, field) do
+      {:ok, value} when is_boolean(value) or is_nil(value) -> {:ok, value}
+      {:ok, value} -> {:error, {:invalid_thread_snapshot, {:invalid_field, field, value}}}
+      :error -> {:ok, nil}
+    end
+  end
+
+  @spec fetch_required_binary_list(map(), atom()) :: {:ok, [binary()]} | {:error, term()}
+  defp fetch_required_binary_list(map, field) do
+    case ProtocolValue.fetch(map, field) do
+      {:ok, values} when is_list(values) ->
+        if Enum.all?(values, &is_binary/1),
+          do: {:ok, values},
+          else: {:error, {:invalid_thread_snapshot, {:invalid_field, field, values}}}
+
+      {:ok, value} ->
+        {:error, {:invalid_thread_snapshot, {:invalid_field, field, value}}}
+
+      :error ->
+        {:error, {:invalid_thread_snapshot, {:missing_field, field}}}
     end
   end
 

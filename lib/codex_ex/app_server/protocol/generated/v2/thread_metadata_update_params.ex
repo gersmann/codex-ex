@@ -3,9 +3,15 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadMetadataUpdateParams do
 
   alias CodexEx.AppServer.Protocol.Codec
 
-  defstruct [:git_info, :project_id, :thread_id]
+  defstruct [:daybreak_enabled, :git_info, :project_id, :thread_id]
 
   @field_specs [
+    %{
+      spec: {:nullable, :plain},
+      field: :daybreak_enabled,
+      required: false,
+      wire_key: "daybreakEnabled"
+    },
     %{
       spec: {:nullable, {:module, Module.concat(__MODULE__, "ThreadMetadataGitInfoUpdateParams")}},
       field: :git_info,

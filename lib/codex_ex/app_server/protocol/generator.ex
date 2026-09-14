@@ -95,9 +95,17 @@ defmodule CodexEx.AppServer.Protocol.Generator do
 
   defp write_generated_files(schema_files, output_path) do
     module_index =
-      Map.new(schema_files, fn schema_file ->
-        {schema_file.title, module_info_for(schema_file.relative_path, schema_file.basename)}
+      schema_files
+      |> Enum.flat_map(fn schema_file ->
+        module_info = module_info_for(schema_file.relative_path, schema_file.basename)
+        entry = {schema_file.title, module_info}
+
+        case nullable_object_definition(schema_file.schema) do
+          {name, _schema} -> [entry, {name, module_info}]
+          nil -> [entry]
+        end
       end)
+      |> Map.new()
 
     Enum.reduce_while(schema_files, {:ok, 0}, fn schema_file, {:ok, count} ->
       module_info = module_info_for(schema_file.relative_path, schema_file.basename)
@@ -129,6 +137,17 @@ defmodule CodexEx.AppServer.Protocol.Generator do
   end
 
   defp build_schema_module_source(schema, module) do
+    schema =
+      case nullable_object_definition(schema) do
+        {name, object_schema} ->
+          schema
+          |> Map.merge(object_schema)
+          |> Map.update!("definitions", &Map.delete(&1, name))
+
+        nil ->
+          schema
+      end
+
     if object_schema?(schema) do
       definitions = Map.get(schema, "definitions", %{})
       nested_definitions = object_definitions(module, definitions)
@@ -244,16 +263,32 @@ defmodule CodexEx.AppServer.Protocol.Generator do
   end
 
   defp envelope_params_helpers(method_specs) do
+    {nullable_decode, nullable_encode} =
+      if Enum.any?(method_specs, fn {_method, spec} -> match?({:nullable, _module}, spec.params_module) end) do
+        {
+          "defp decode_params({:nullable, module}, params), do: Codec.decode_value({:nullable, {:module, module}}, params)\n",
+          """
+          defp maybe_put_params(payload, {:nullable, module}, params) do
+            Map.put(payload, "params", Codec.encode_value({:nullable, {:module, module}}, params))
+          end
+          """
+        }
+      else
+        {"", ""}
+      end
+
     if Enum.any?(method_specs, fn {_method, spec} -> Map.get(spec, :params_module) end) do
       """
       defp decode_params(nil, nil), do: nil
       defp decode_params(nil, params), do: params
-      defp decode_params(module, nil), do: module.decode(%{})
+      #{nullable_decode}defp decode_params(module, nil), do: module.decode(%{})
       defp decode_params(module, params), do: module.decode(params)
 
       defp maybe_put_params(payload, nil, nil), do: payload
       defp maybe_put_params(payload, nil, %{} = params) when map_size(params) == 0, do: payload
       defp maybe_put_params(payload, nil, params), do: Map.put(payload, "params", params)
+
+      #{nullable_encode}
 
       defp maybe_put_params(payload, module, params) do
         Map.put(payload, "params", module.encode(params))
@@ -280,7 +315,12 @@ defmodule CodexEx.AppServer.Protocol.Generator do
     params_module =
       case get_in(variant, ["properties", "params", "$ref"]) do
         nil ->
-          nil
+          modules = Map.new(module_index, fn {name, %{module: module}} -> {name, module} end)
+
+          case build_value_spec(get_in(variant, ["properties", "params"]), modules) do
+            {:nullable, {:module, module}} -> {:nullable, module}
+            _spec -> nil
+          end
 
         "#/definitions/" <> definition_name ->
           case Map.fetch(module_index, definition_name) do
@@ -458,6 +498,21 @@ defmodule CodexEx.AppServer.Protocol.Generator do
     |> Enum.filter(fn {_name, schema} -> object_schema?(schema) end)
     |> Enum.map(fn {name, schema} -> {name, Module.concat(module, name), schema} end)
   end
+
+  defp nullable_object_definition(%{"anyOf" => schemas, "definitions" => definitions}) do
+    case Enum.reject(schemas, &(&1["type"] == "null")) do
+      [%{"$ref" => "#/definitions/" <> name}] when length(schemas) == 2 ->
+        case Map.fetch(definitions, name) do
+          {:ok, %{"type" => "object"} = schema} -> {name, schema}
+          _other -> nil
+        end
+
+      _other ->
+        nil
+    end
+  end
+
+  defp nullable_object_definition(_schema), do: nil
 
   defp object_schema?(%{"type" => "object"}), do: true
 

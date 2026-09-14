@@ -22,12 +22,16 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.ClientRequest do
     "account/rateLimitResetCredit/consume" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.ConsumeAccountRateLimitResetCreditParams
     },
-    "account/rateLimits/read" => %{params_module: nil},
+    "account/rateLimits/read" => %{
+      params_module: {:nullable, CodexEx.AppServer.Protocol.Generated.V2.NullableGetAccountRateLimitsParams}
+    },
     "account/read" => %{params_module: CodexEx.AppServer.Protocol.Generated.V2.GetAccountParams},
     "account/sendAddCreditsNudgeEmail" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.SendAddCreditsNudgeEmailParams
     },
-    "account/usage/read" => %{params_module: nil},
+    "account/usage/read" => %{
+      params_module: {:nullable, CodexEx.AppServer.Protocol.Generated.V2.NullableGetAccountTokenUsageParams}
+    },
     "account/workspaceMessages/read" => %{params_module: nil},
     "app/installed" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.AppsInstalledParams
@@ -217,8 +221,12 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.ClientRequest do
     "remoteControl/client/revoke" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.RemoteControlClientsRevokeParams
     },
-    "remoteControl/disable" => %{params_module: nil},
-    "remoteControl/enable" => %{params_module: nil},
+    "remoteControl/disable" => %{
+      params_module: {:nullable, CodexEx.AppServer.Protocol.Generated.V2.NullableRemoteControlDisableParams}
+    },
+    "remoteControl/enable" => %{
+      params_module: {:nullable, CodexEx.AppServer.Protocol.Generated.V2.NullableRemoteControlEnableParams}
+    },
     "remoteControl/pairing/start" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.RemoteControlPairingStartParams
     },
@@ -387,6 +395,18 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.ClientRequest do
     },
     "turn/start" => %{params_module: CodexEx.AppServer.Protocol.Generated.V2.TurnStartParams},
     "turn/steer" => %{params_module: CodexEx.AppServer.Protocol.Generated.V2.TurnSteerParams},
+    "userVerification/delete" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.UserVerificationDeleteParams
+    },
+    "userVerification/enroll" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.UserVerificationEnrollParams
+    },
+    "userVerification/status" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.UserVerificationStatusParams
+    },
+    "userVerification/verify" => %{
+      params_module: CodexEx.AppServer.Protocol.Generated.V2.UserVerificationVerifyParams
+    },
     "windowsSandbox/readiness" => %{params_module: nil},
     "windowsSandbox/setupStart" => %{
       params_module: CodexEx.AppServer.Protocol.Generated.V2.WindowsSandboxSetupStartParams
@@ -422,12 +442,19 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.ClientRequest do
 
   defp decode_params(nil, nil), do: nil
   defp decode_params(nil, params), do: params
+
+  defp decode_params({:nullable, module}, params), do: Codec.decode_value({:nullable, {:module, module}}, params)
+
   defp decode_params(module, nil), do: module.decode(%{})
   defp decode_params(module, params), do: module.decode(params)
 
   defp maybe_put_params(payload, nil, nil), do: payload
   defp maybe_put_params(payload, nil, %{} = params) when map_size(params) == 0, do: payload
   defp maybe_put_params(payload, nil, params), do: Map.put(payload, "params", params)
+
+  defp maybe_put_params(payload, {:nullable, module}, params) do
+    Map.put(payload, "params", Codec.encode_value({:nullable, {:module, module}}, params))
+  end
 
   defp maybe_put_params(payload, module, params) do
     Map.put(payload, "params", module.encode(params))

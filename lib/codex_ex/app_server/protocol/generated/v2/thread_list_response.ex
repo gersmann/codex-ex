@@ -372,6 +372,8 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadListResponse do
       :cli_version,
       :created_at,
       :cwd,
+      :daybreak_enabled,
+      :environments,
       :ephemeral,
       :extra,
       :forked_from_id,
@@ -381,6 +383,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadListResponse do
       :model,
       :model_provider,
       :name,
+      :originator,
       :parent_thread_id,
       :path,
       :preview,
@@ -414,6 +417,18 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadListResponse do
       %{spec: :plain, field: :cli_version, required: true, wire_key: "cliVersion"},
       %{spec: :plain, field: :created_at, required: true, wire_key: "createdAt"},
       %{spec: :plain, field: :cwd, required: true, wire_key: "cwd"},
+      %{
+        spec: {:nullable, :plain},
+        field: :daybreak_enabled,
+        required: false,
+        wire_key: "daybreakEnabled"
+      },
+      %{
+        spec: {:nullable, {:array, {:module, Module.concat(ParentModule, "ThreadEnvironment")}}},
+        field: :environments,
+        required: false,
+        wire_key: "environments"
+      },
       %{spec: :plain, field: :ephemeral, required: true, wire_key: "ephemeral"},
       %{
         spec: {:nullable, {:module, Module.concat(ParentModule, "ThreadExtra")}},
@@ -438,6 +453,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadListResponse do
       %{spec: {:nullable, :plain}, field: :model, required: false, wire_key: "model"},
       %{spec: :plain, field: :model_provider, required: true, wire_key: "modelProvider"},
       %{spec: {:nullable, :plain}, field: :name, required: false, wire_key: "name"},
+      %{spec: {:nullable, :plain}, field: :originator, required: false, wire_key: "originator"},
       %{
         spec: {:nullable, :plain},
         field: :parent_thread_id,
@@ -482,6 +498,33 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadListResponse do
         wire_key: "turns"
       },
       %{spec: :plain, field: :updated_at, required: true, wire_key: "updatedAt"}
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
+  defmodule ThreadEnvironment do
+    @moduledoc false
+
+    defstruct [:cwd, :environment_id, :runtime_workspace_roots]
+
+    @field_specs [
+      %{spec: :plain, field: :cwd, required: true, wire_key: "cwd"},
+      %{spec: :plain, field: :environment_id, required: true, wire_key: "environmentId"},
+      %{
+        spec: {:array, :plain},
+        field: :runtime_workspace_roots,
+        required: true,
+        wire_key: "runtimeWorkspaceRoots"
+      }
     ]
 
     def decode(payload) when is_map(payload) do

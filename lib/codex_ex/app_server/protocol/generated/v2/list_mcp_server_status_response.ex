@@ -63,7 +63,8 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ListMcpServerStatusResponse do
       :resources,
       :runtime_status,
       :server_info,
-      :tools
+      :tools,
+      :tools_error
     ]
 
     @field_specs [
@@ -94,7 +95,8 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ListMcpServerStatusResponse do
         required: false,
         wire_key: "serverInfo"
       },
-      %{spec: :plain, field: :tools, required: true, wire_key: "tools"}
+      %{spec: :plain, field: :tools, required: true, wire_key: "tools"},
+      %{spec: {:nullable, :plain}, field: :tools_error, required: false, wire_key: "toolsError"}
     ]
 
     def decode(payload) when is_map(payload) do

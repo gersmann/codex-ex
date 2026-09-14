@@ -6,6 +6,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.GetAccountRateLimitsResponse d
 
   defstruct [
     :account_id,
+    :ordinary_usage_allowed,
     :rate_limit_reset_credits,
     :rate_limit_upsell,
     :rate_limits,
@@ -14,6 +15,12 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.GetAccountRateLimitsResponse d
 
   @field_specs [
     %{spec: {:nullable, :plain}, field: :account_id, required: false, wire_key: "accountId"},
+    %{
+      spec: {:nullable, :plain},
+      field: :ordinary_usage_allowed,
+      required: false,
+      wire_key: "ordinaryUsageAllowed"
+    },
     %{
       spec: {:nullable, {:module, Module.concat(__MODULE__, "RateLimitResetCreditsSummary")}},
       field: :rate_limit_reset_credits,
@@ -131,6 +138,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.GetAccountRateLimitsResponse d
       :individual_limit,
       :limit_id,
       :limit_name,
+      :normal_model_slug,
       :plan_type,
       :primary,
       :rate_limit_reached_type,
@@ -153,6 +161,12 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.GetAccountRateLimitsResponse d
       },
       %{spec: {:nullable, :plain}, field: :limit_id, required: false, wire_key: "limitId"},
       %{spec: {:nullable, :plain}, field: :limit_name, required: false, wire_key: "limitName"},
+      %{
+        spec: {:nullable, :plain},
+        field: :normal_model_slug,
+        required: false,
+        wire_key: "normalModelSlug"
+      },
       %{spec: {:nullable, :plain}, field: :plan_type, required: false, wire_key: "planType"},
       %{
         spec: {:nullable, {:module, Module.concat(ParentModule, "RateLimitWindow")}},

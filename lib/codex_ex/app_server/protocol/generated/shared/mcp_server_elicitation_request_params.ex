@@ -6,24 +6,30 @@ defmodule CodexEx.AppServer.Protocol.Generated.Shared.McpServerElicitationReques
 
   defstruct [
     :_meta,
+    :challenge,
+    :description,
     :elicitation_id,
     :message,
     :mode,
     :requested_schema,
     :server_name,
     :thread_id,
+    :title,
     :turn_id,
     :url
   ]
 
   @field_specs [
     %{spec: :plain, field: :_meta, required: false, wire_key: "_meta"},
+    %{spec: :plain, field: :challenge, required: false, wire_key: "challenge"},
+    %{spec: :plain, field: :description, required: false, wire_key: "description"},
     %{spec: :plain, field: :elicitation_id, required: false, wire_key: "elicitationId"},
     %{spec: :plain, field: :message, required: false, wire_key: "message"},
     %{spec: :plain, field: :mode, required: false, wire_key: "mode"},
     %{spec: :plain, field: :requested_schema, required: false, wire_key: "requestedSchema"},
     %{spec: :plain, field: :server_name, required: true, wire_key: "serverName"},
     %{spec: :plain, field: :thread_id, required: true, wire_key: "threadId"},
+    %{spec: :plain, field: :title, required: false, wire_key: "title"},
     %{spec: {:nullable, :plain}, field: :turn_id, required: false, wire_key: "turnId"},
     %{spec: :plain, field: :url, required: false, wire_key: "url"}
   ]

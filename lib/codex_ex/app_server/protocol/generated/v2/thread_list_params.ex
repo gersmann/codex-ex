@@ -10,6 +10,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadListParams do
     :cwd,
     :limit,
     :model_providers,
+    :originators,
     :parent_thread_id,
     :project_id,
     :search_term,
@@ -36,6 +37,12 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadListParams do
       field: :model_providers,
       required: false,
       wire_key: "modelProviders"
+    },
+    %{
+      spec: {:nullable, {:array, :plain}},
+      field: :originators,
+      required: false,
+      wire_key: "originators"
     },
     %{
       spec: {:nullable, :plain},

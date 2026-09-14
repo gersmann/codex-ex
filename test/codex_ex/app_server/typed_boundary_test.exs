@@ -13,6 +13,9 @@ defmodule CodexEx.AppServer.TypedBoundaryTest do
   alias CodexEx.AppServer.Protocol.Generated.Shared.ServerNotification
   alias CodexEx.AppServer.Protocol.Generated.Shared.ToolRequestUserInputResponse
   alias CodexEx.AppServer.Protocol.Generated.Shared.ToolRequestUserInputResponse.ToolRequestUserInputAnswer
+  alias CodexEx.AppServer.Protocol.Generated.V2.ThreadListParams
+  alias CodexEx.AppServer.Protocol.Generated.V2.ThreadListResponse
+  alias CodexEx.AppServer.Protocol.Generated.V2.ThreadReadResponse
   alias CodexEx.AppServer.Protocol.GenericNotification
   alias CodexEx.AppServer.ThreadGoal
   alias CodexEx.AppServer.ThreadItem
@@ -170,6 +173,84 @@ defmodule CodexEx.AppServer.TypedBoundaryTest do
 
     assert {:ok, %ThreadSnapshot{history_mode: "legacy", status: "idle"}} =
              ThreadSnapshot.from_protocol(payload)
+  end
+
+  test "thread snapshots preserve metadata from raw maps and generated response structs" do
+    environments = [
+      %{
+        "cwd" => "/tmp/primary",
+        "environmentId" => "primary",
+        "runtimeWorkspaceRoots" => ["/tmp/primary", "/tmp/shared"]
+      },
+      %{"cwd" => "/tmp/secondary", "environmentId" => "secondary", "runtimeWorkspaceRoots" => []}
+    ]
+
+    expected_environments = [
+      %ThreadSnapshot.Environment{
+        cwd: "/tmp/primary",
+        environment_id: "primary",
+        runtime_workspace_roots: ["/tmp/primary", "/tmp/shared"]
+      },
+      %ThreadSnapshot.Environment{cwd: "/tmp/secondary", environment_id: "secondary", runtime_workspace_roots: []}
+    ]
+
+    for {metadata, expected} <- [
+          {%{}, {nil, nil, nil}},
+          {%{"originator" => nil, "environments" => nil, "daybreakEnabled" => nil}, {nil, nil, nil}},
+          {%{"originator" => "codex_cli_rs", "environments" => [], "daybreakEnabled" => false},
+           {"codex_cli_rs", [], false}},
+          {%{"originator" => "codex_cli_rs", "environments" => environments, "daybreakEnabled" => true},
+           {"codex_cli_rs", expected_environments, true}}
+        ] do
+      payload = Map.merge(thread_payload(), metadata)
+      %ThreadListResponse{data: [listed_thread]} = ThreadListResponse.decode(%{"data" => [payload]})
+      %ThreadReadResponse{thread: read_thread} = ThreadReadResponse.decode(%{"thread" => payload})
+
+      for thread <- [payload, listed_thread, read_thread] do
+        assert {:ok, snapshot} = ThreadSnapshot.from_protocol(thread)
+        assert {snapshot.originator, snapshot.environments, snapshot.daybreak_enabled} == expected
+      end
+    end
+  end
+
+  test "thread snapshots reject malformed metadata at the SDK boundary" do
+    environment = %{"cwd" => "/tmp/project", "environmentId" => "primary", "runtimeWorkspaceRoots" => []}
+
+    for {metadata, field, invalid_value} <- [
+          {%{"originator" => 123}, :originator, 123},
+          {%{"daybreakEnabled" => "false"}, :daybreak_enabled, "false"},
+          {%{"environments" => %{}}, :environments, %{}},
+          {%{"environments" => [%{environment | "cwd" => 123}]}, :cwd, 123},
+          {%{"environments" => [%{environment | "environmentId" => 123}]}, :environment_id, 123},
+          {%{"environments" => [%{environment | "runtimeWorkspaceRoots" => [123]}]}, :runtime_workspace_roots, [123]},
+          {%{"environments" => [%{environment | "runtimeWorkspaceRoots" => "/tmp/project"}]}, :runtime_workspace_roots,
+           "/tmp/project"}
+        ] do
+      payload = Map.merge(thread_payload(), metadata)
+      %ThreadListResponse{data: [listed_thread]} = ThreadListResponse.decode(%{"data" => [payload]})
+
+      for thread <- [payload, listed_thread] do
+        assert {:error, {:invalid_thread_snapshot, {:invalid_field, ^field, ^invalid_value}}} =
+                 ThreadSnapshot.from_protocol(thread)
+      end
+    end
+
+    assert {:error, {:invalid_thread_snapshot, {:invalid_environment, 123}}} =
+             ThreadSnapshot.from_protocol(Map.put(thread_payload(), "environments", [123]))
+
+    assert {:error, {:invalid_thread_snapshot, {:missing_field, :runtime_workspace_roots}}} =
+             ThreadSnapshot.from_protocol(
+               Map.put(thread_payload(), "environments", [Map.delete(environment, "runtimeWorkspaceRoots")])
+             )
+  end
+
+  test "thread list filters retain originators through generated encoding" do
+    for originators <- [[], ["codex_cli_rs", "automation"]] do
+      assert ThreadListParams.encode(%ThreadListParams{originators: originators, limit: 20}) == %{
+               "originators" => originators,
+               "limit" => 20
+             }
+    end
   end
 
   test "turn conversion returns an error tuple instead of raising on malformed payloads" do
@@ -338,5 +419,21 @@ defmodule CodexEx.AppServer.TypedBoundaryTest do
 
     assert {:error, {:invalid_thread_goal, {:missing_field, :created_at}}} =
              Message.extract_thread_goal(invalid_message)
+  end
+
+  defp thread_payload do
+    %{
+      "cliVersion" => "0.154.0",
+      "createdAt" => 1_711_123_200,
+      "cwd" => "/tmp/project",
+      "ephemeral" => false,
+      "id" => "thread-1",
+      "modelProvider" => "openai",
+      "preview" => "Preview",
+      "source" => "appServer",
+      "status" => %{"type" => "idle"},
+      "turns" => [],
+      "updatedAt" => 1_711_123_201
+    }
   end
 end

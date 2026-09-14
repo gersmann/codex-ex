@@ -90,6 +90,24 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ThreadResumeParams do
 
   def encode(other), do: Codec.encode_value(:plain, other)
 
+  defmodule ConfigurationReasoning do
+    @moduledoc false
+
+    defstruct [:effort]
+
+    @field_specs [%{spec: :plain, field: :effort, required: true, wire_key: "effort"}]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
   defmodule InternalChatMessageMetadataPassthrough do
     @moduledoc false
 

@@ -25,6 +25,54 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigRequirementsReadResponse
 
   def encode(other), do: Codec.encode_value(:plain, other)
 
+  defmodule ApplicationNetworkRequirements do
+    @moduledoc false
+
+    defstruct [:domains, :enabled]
+
+    @field_specs [
+      %{spec: :plain, field: :domains, required: true, wire_key: "domains"},
+      %{spec: :plain, field: :enabled, required: true, wire_key: "enabled"}
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
+  defmodule ApplicationRequirements do
+    @moduledoc false
+
+    alias ConfigRequirementsReadResponse, as: ParentModule
+
+    defstruct [:network]
+
+    @field_specs [
+      %{
+        spec: {:nullable, {:module, Module.concat(ParentModule, "ApplicationNetworkRequirements")}},
+        field: :network,
+        required: false,
+        wire_key: "network"
+      }
+    ]
+
+    def decode(payload) when is_map(payload) do
+      Codec.decode_object(__MODULE__, @field_specs, payload)
+    end
+
+    def decode(other), do: other
+
+    def encode(%__MODULE__{} = value), do: Codec.encode_object(value, @field_specs)
+
+    def encode(other), do: Codec.encode_value(:plain, other)
+  end
+
   defmodule AutoReviewRequirements do
     @moduledoc false
 
@@ -113,6 +161,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigRequirementsReadResponse
     defstruct [
       :allow_global_persistent_approval,
       :allow_history_access,
+      :allow_webmcp,
       :default_origin_policy,
       :disable_auto_review,
       :origins
@@ -130,6 +179,12 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigRequirementsReadResponse
         field: :allow_history_access,
         required: false,
         wire_key: "allowHistoryAccess"
+      },
+      %{
+        spec: {:nullable, :plain},
+        field: :allow_webmcp,
+        required: false,
+        wire_key: "allowWebmcp"
       },
       %{
         spec: {:nullable, {:module, Module.concat(ParentModule, "BrowserUseOriginPolicy")}},
@@ -303,6 +358,7 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigRequirementsReadResponse
       :allowed_sandbox_modes,
       :allowed_web_search_modes,
       :allowed_windows_sandbox_implementations,
+      :application,
       :auto_review,
       :browser_use,
       :chatgpt_base_url,
@@ -395,6 +451,12 @@ defmodule CodexEx.AppServer.Protocol.Generated.V2.ConfigRequirementsReadResponse
         field: :allowed_windows_sandbox_implementations,
         required: false,
         wire_key: "allowedWindowsSandboxImplementations"
+      },
+      %{
+        spec: {:nullable, {:module, Module.concat(ParentModule, "ApplicationRequirements")}},
+        field: :application,
+        required: false,
+        wire_key: "application"
       },
       %{
         spec: {:nullable, {:module, Module.concat(ParentModule, "AutoReviewRequirements")}},
