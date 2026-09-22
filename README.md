@@ -101,7 +101,9 @@ Optional host configuration:
 config :codex_ex,
   # Phoenix.PubSub server for thread-activity broadcasts (nil disables them)
   pubsub: MyApp.PubSub,
-  # Starts a shared local observer client at boot
+  # Enables a shared local observer client; the host starts it by calling
+  # CodexEx.AppServer.ClientManager.reconcile_thread_activity/0 once its
+  # PubSub and recovery dependencies are running
   thread_activity_observer_enabled: true,
   # MFA invoked during local thread-activity reconciliation,
   # must return {:ok, term()} | {:error, term()}

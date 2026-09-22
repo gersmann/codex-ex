@@ -58,6 +58,9 @@ defmodule CodexEx.AppServer.ClientManager do
     GenServer.cast(__MODULE__, :reconcile_thread_activity)
   end
 
+  # The observer starts on the first `reconcile_thread_activity/0` call, not at
+  # init: reconciliation broadcasts on the host PubSub and runs the host recovery
+  # hook, neither of which exists yet while `:codex_ex` boots ahead of its host.
   @impl true
   def init(:ok) do
     observer_key =
@@ -72,15 +75,7 @@ defmodule CodexEx.AppServer.ClientManager do
       thread_activity_reconciliation: nil
     }
 
-    if observer_key,
-      do: {:ok, state, {:continue, :start_thread_activity_observer}},
-      else: {:ok, state}
-  end
-
-  @impl true
-  def handle_continue(:start_thread_activity_observer, state) do
-    state = ensure_thread_activity_observer(state)
-    {:noreply, start_thread_activity_reconciliation(state)}
+    {:ok, state}
   end
 
   @impl true
