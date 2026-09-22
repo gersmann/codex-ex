@@ -92,23 +92,32 @@ fork, archive, goals, model/skill listing, and fuzzy file search are all on
 ## Host integration
 
 The package runs its own supervision tree (`CodexEx.Application`): a
-`Task.Supervisor` (`CodexEx.TaskSupervisor`), a `DynamicSupervisor`
-(`CodexEx.ClientSupervisor`), and the `ClientManager` singleton.
+`Task.Supervisor` (`CodexEx.TaskSupervisor`), a `Registry`
+(`CodexEx.ClientRegistry`), a `DynamicSupervisor` (`CodexEx.ClientSupervisor`),
+and the `ClientManager` singleton.
 
 Optional host configuration:
 
 ```elixir
 config :codex_ex,
   # Phoenix.PubSub server for thread-activity broadcasts (nil disables them)
-  pubsub: MyApp.PubSub,
-  # Enables a shared local observer client; the host starts it by calling
-  # CodexEx.AppServer.ClientManager.reconcile_thread_activity/0 once its
-  # PubSub and recovery dependencies are running
-  thread_activity_observer_enabled: true,
-  # MFA invoked during local thread-activity reconciliation,
-  # must return {:ok, term()} | {:error, term()}
-  thread_activity_recovery: {MyApp.SessionRecovery, :recover_pending_sessions, [[runtime_type: "local"]]}
+  pubsub: MyApp.PubSub
 ```
+
+To publish threads already active on the local app server, add the observer to
+your own supervision tree after the PubSub and anything its recovery hook needs:
+
+```elixir
+children = [
+  {Phoenix.PubSub, name: MyApp.PubSub},
+  # ...
+  {CodexEx.ThreadActivityObserver,
+   # optional, must return {:ok, term()} | {:error, term()}; errors are retried
+   recover: {MyApp.SessionRecovery, :recover_pending_sessions, [[runtime_type: "local"]]}}
+]
+```
+
+`CodexEx.ThreadActivityObserver.reconcile/0` re-publishes on demand.
 
 Custom transports implement the `CodexEx.AppServer.Transport` behaviour and are
 passed as the `:transport` option. Remote transports (sessions that outlive the
@@ -121,7 +130,9 @@ node) additionally implement the optional callbacks `remote_transport?/0`,
 ## Process Hierarchy
 
 ```
-ClientManager (singleton, named GenServer)
+ClientRegistry (unique Registry, key = connection identity)
+ClientManager (singleton; monitors registered Clients)
+ClientSupervisor (DynamicSupervisor)
   └─ Client (one per unique connection key, :temporary)
        State: session pid, subscribers, pending requests, request handler
        │
@@ -140,8 +151,10 @@ completes.
 
 All Clients are started under `CodexEx.ClientSupervisor`
 (a DynamicSupervisor) with `:temporary` restart — they do not restart on
-crash. `ClientManager` monitors pooled Clients and reuses only live pids;
-normal Client shutdown also stops its owned Session and transport.
+crash. Each Client registers in `CodexEx.ClientRegistry` under its
+connection key, so a `ClientManager` restart forgets nothing: it rebuilds its
+monitors from the registry. Normal Client shutdown also stops its owned Session
+and transport.
 
 ---
 
@@ -194,14 +207,17 @@ the response through `Session`.
 
 #### `ClientManager`
 
-Singleton GenServer that pools `Client` processes by connection identity.
+Pools `Client` processes by connection identity through `CodexEx.ClientRegistry`.
+The GenServer itself only monitors clients so a dead remote client triggers its
+transport's `reconcile_thread_activity/1`.
 
 The effective identity includes transport, launcher, workspace/runner,
 initialize, and protocol options. Remote daemon transport ids intentionally
 exclude local-only observer flags so deploys can reattach retained sessions.
 
-On `get_client/1`, the manager returns a live client for the key or starts one
-under `CodexEx.ClientSupervisor`. Shared clients disallow
+`get_client/1` runs in the caller: it returns the registered client for the key
+or starts one under `CodexEx.ClientSupervisor`; concurrent starts for one key
+resolve to a single client through the unique registry name. Shared clients disallow
 `request_handler` (it would be ambiguous with multiple consumers).
 
 #### `Session`
@@ -700,8 +716,8 @@ Transport receives request bytes
 
 `ClientManager` reuses clients by their effective connection identity. Two
 callers with the same transport, launcher, workspace/runner, initialize, and
-protocol options get the same `Client` pid. Dead pooled clients are removed by
-monitor and replaced on the next request.
+protocol options get the same `Client` pid. Dead pooled clients drop out of the
+registry and are replaced on the next request.
 
 ### Stale Client Recovery
 

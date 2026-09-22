@@ -7,6 +7,7 @@ defmodule CodexEx.Application do
   def start(_type, _args) do
     children = [
       {Task.Supervisor, name: CodexEx.TaskSupervisor},
+      {Registry, keys: :unique, name: CodexEx.ClientRegistry},
       {DynamicSupervisor, name: CodexEx.ClientSupervisor, strategy: :one_for_one},
       CodexEx.AppServer.ClientManager
     ]

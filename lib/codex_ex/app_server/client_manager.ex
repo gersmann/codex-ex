@@ -4,29 +4,24 @@ defmodule CodexEx.AppServer.ClientManager do
 
   The stdio transport spawns an OS `codex app-server` process, so reusing clients by
   launcher config prevents one subprocess per session page or sync call.
+
+  Clients register under their launcher key in `CodexEx.ClientRegistry`, so the
+  registry — not this process — is the source of truth for which clients exist.
+  This process only monitors clients to reconcile remote thread activity when one
+  dies, and rebuilds its monitors from the registry when it restarts.
   """
 
   use GenServer
 
   alias CodexEx.AppServer.Client
 
-  @manager_call_timeout_ms 30_000
-  @thread_activity_observer_opts [proxy_only?: true, broadcasts_thread_activity?: true]
-  @thread_activity_retry_ms 5_000
+  @registry CodexEx.ClientRegistry
 
   @type client_key ::
           {:client, transport :: term(), runner_id :: term(), url :: term(), executable :: term(), args :: term(),
            workspace_id :: term(), workspace_root :: term(), initialize_params :: term(), strict_protocol :: boolean(),
            proxy_only :: boolean(), broadcasts_thread_activity :: boolean()}
   @type get_client_result :: {:ok, Client.t()} | {:error, term()}
-
-  @type state :: %{
-          clients: %{client_key() => pid()},
-          refs: %{reference() => client_key()},
-          thread_activity_observer_key: client_key() | nil,
-          thread_activity_retry_ref: reference() | nil,
-          thread_activity_reconciliation: nil | %{task: Task.t(), client: pid(), rerun?: boolean()}
-        }
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -35,270 +30,86 @@ defmodule CodexEx.AppServer.ClientManager do
 
   @spec get_client(keyword()) :: get_client_result()
   def get_client(opts) when is_list(opts) do
-    __MODULE__
-    |> safe_manager_call({:get_client, opts})
-    |> normalize_get_client_reply()
+    opts = normalize_client_opts(opts)
+
+    with {:ok, key} <- normalize_key(opts) do
+      case Registry.lookup(@registry, key) do
+        [{pid, _value}] -> if Process.alive?(pid), do: {:ok, pid}, else: start_client(key, opts)
+        [] -> start_client(key, opts)
+      end
+    end
+  end
+
+  @doc "Lists registered shared clients as `{key, pid}` pairs."
+  @spec clients() :: [{client_key(), pid()}]
+  def clients do
+    Registry.select(@registry, [{{:"$1", :"$2", :_}, [], [{{:"$1", :"$2"}}]}])
   end
 
   @spec remote_thread_activity_client?(pid(), binary(), binary()) :: boolean()
   def remote_thread_activity_client?(client, runner_id, workspace_id)
       when is_pid(client) and is_binary(runner_id) and is_binary(workspace_id) do
-    case safe_manager_call(
-           __MODULE__,
-           {:remote_thread_activity_client?, client, runner_id, workspace_id}
-         ) do
-      true -> true
-      _other -> false
-    end
+    @registry
+    |> Registry.keys(client)
+    |> Enum.any?(fn
+      {:client, transport, ^runner_id, _url, _executable, _args, ^workspace_id, _workspace_root, _initialize_params,
+       _strict_protocol, _proxy_only, true} ->
+        remote_transport?(transport)
+
+      _other ->
+        false
+    end)
   end
 
-  @doc "Publishes already-active threads through the shared local observer."
-  @spec reconcile_thread_activity() :: :ok
-  def reconcile_thread_activity do
-    GenServer.cast(__MODULE__, :reconcile_thread_activity)
-  end
-
-  # The observer starts on the first `reconcile_thread_activity/0` call, not at
-  # init: reconciliation broadcasts on the host PubSub and runs the host recovery
-  # hook, neither of which exists yet while `:codex_ex` boots ahead of its host.
   @impl true
   def init(:ok) do
-    observer_key =
-      if Application.get_env(:codex_ex, :thread_activity_observer_enabled, false),
-        do: shared_client_key(@thread_activity_observer_opts)
-
-    state = %{
-      clients: %{},
-      refs: %{},
-      thread_activity_observer_key: observer_key,
-      thread_activity_retry_ref: nil,
-      thread_activity_reconciliation: nil
-    }
-
-    {:ok, state}
+    {:ok, Enum.reduce(clients(), %{}, fn {key, pid}, monitored -> monitor(monitored, key, pid) end)}
   end
 
   @impl true
-  def handle_cast(:reconcile_thread_activity, state) do
-    state = ensure_thread_activity_observer(state)
-    {:noreply, start_thread_activity_reconciliation(state)}
-  end
+  def handle_cast({:monitor, key, pid}, monitored), do: {:noreply, monitor(monitored, key, pid)}
 
   @impl true
-  def handle_call({:get_client, opts}, _from, state) do
-    opts = normalize_client_opts(opts)
+  def handle_info({:DOWN, _ref, :process, pid, _reason}, monitored) do
+    case Map.pop(monitored, pid) do
+      {nil, monitored} ->
+        {:noreply, monitored}
 
-    case normalize_key(opts) do
-      {:ok, key} ->
-        case Map.fetch(state.clients, key) do
-          {:ok, pid} when is_pid(pid) ->
-            if Process.alive?(pid) do
-              {:reply, {:ok, pid}, state}
-            else
-              start_shared_client(state, key, opts)
-            end
-
-          _other ->
-            start_shared_client(state, key, opts)
-        end
-
-      {:error, _reason} = error ->
-        {:reply, error, state}
-    end
-  end
-
-  def handle_call({:remote_thread_activity_client?, client, runner_id, workspace_id}, _from, state) do
-    matched? =
-      Enum.any?(state.clients, fn
-        {{:client, transport, ^runner_id, _url, _executable, _args, ^workspace_id, _workspace_root, _initialize_params,
-          _strict_protocol, _proxy_only, true}, ^client} ->
-          remote_transport?(transport)
-
-        _other ->
-          false
-      end)
-
-    {:reply, matched?, state}
-  end
-
-  @impl true
-  def handle_info({ref, result}, %{thread_activity_reconciliation: %{task: %{ref: ref}}} = state) do
-    Process.demonitor(ref, [:flush])
-    {:noreply, finish_thread_activity_reconciliation(state, result)}
-  end
-
-  def handle_info({:DOWN, ref, :process, _pid, reason}, %{thread_activity_reconciliation: %{task: %{ref: ref}}} = state) do
-    {:noreply, finish_thread_activity_reconciliation(state, {:error, reason})}
-  end
-
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
-    case Map.pop(state.refs, ref) do
-      {nil, refs} ->
-        {:noreply, %{state | refs: refs}}
-
-      {key, refs} ->
-        state = %{state | refs: refs, clients: Map.delete(state.clients, key)}
+      {key, monitored} ->
         _ = reconcile_remote_thread_activity(key)
-
-        {:noreply, maybe_schedule_thread_activity_retry(state, key)}
+        {:noreply, monitored}
     end
   end
 
-  def handle_info(:retry_thread_activity_observer, state) do
-    state = cancel_thread_activity_retry(state)
-    state = ensure_thread_activity_observer(state)
-    {:noreply, start_thread_activity_reconciliation(state)}
-  end
+  def handle_info(_message, monitored), do: {:noreply, monitored}
 
-  def handle_info(_message, state), do: {:noreply, state}
+  # Concurrent starts for one key race on the registry name: the loser exits before
+  # `init`, so no duplicate app-server is spawned, and its caller gets the winner.
+  defp start_client(key, opts) do
+    case DynamicSupervisor.start_child(CodexEx.ClientSupervisor, shared_client_child_spec(key, opts)) do
+      {:ok, pid} ->
+        # A cast dropped while this process restarts is covered by `init/1`'s registry scan.
+        GenServer.cast(__MODULE__, {:monitor, key, pid})
+        {:ok, pid}
 
-  defp start_shared_client(state, key, opts) do
-    case do_start_shared_client(state, key, opts) do
-      {:ok, pid, state} -> {:reply, {:ok, pid}, state}
-      {:error, reason, state} -> {:reply, {:error, reason}, state}
-    end
-  end
-
-  defp do_start_shared_client(state, key, opts) do
-    state = drop_key(state, key)
-
-    case DynamicSupervisor.start_child(
-           CodexEx.ClientSupervisor,
-           shared_client_child_spec(key, opts)
-         ) do
-      {:ok, pid} when is_pid(pid) ->
-        ref = Process.monitor(pid)
-
-        state = %{
-          state
-          | clients: Map.put(state.clients, key, pid),
-            refs: Map.put(state.refs, ref, key)
-        }
-
-        {:ok, pid, state}
+      {:error, {:already_started, pid}} ->
+        {:ok, pid}
 
       {:error, reason} ->
-        {:error, reason, state}
+        {:error, reason}
 
       other ->
-        {:error, {:shared_client_start_failed, other}, state}
+        {:error, {:shared_client_start_failed, other}}
     end
   end
 
-  defp ensure_thread_activity_observer(%{thread_activity_observer_key: nil} = state), do: state
-
-  defp ensure_thread_activity_observer(state) do
-    key = state.thread_activity_observer_key
-
-    case Map.get(state.clients, key) do
-      pid when is_pid(pid) ->
-        state
-
-      _missing ->
-        case do_start_shared_client(state, key, @thread_activity_observer_opts) do
-          {:ok, _pid, state} -> state
-          {:error, _reason, state} -> maybe_schedule_thread_activity_retry(state, key)
-        end
+  defp monitor(monitored, key, pid) do
+    if Map.has_key?(monitored, pid) do
+      monitored
+    else
+      Process.monitor(pid)
+      Map.put(monitored, pid, key)
     end
-  end
-
-  defp maybe_schedule_thread_activity_retry(%{thread_activity_observer_key: key} = state, key) when not is_nil(key) do
-    schedule_thread_activity_retry(state)
-  end
-
-  defp maybe_schedule_thread_activity_retry(state, _key), do: state
-
-  defp schedule_thread_activity_retry(%{thread_activity_retry_ref: ref} = state) when is_reference(ref), do: state
-
-  defp schedule_thread_activity_retry(state) do
-    ref = Process.send_after(self(), :retry_thread_activity_observer, @thread_activity_retry_ms)
-    %{state | thread_activity_retry_ref: ref}
-  end
-
-  defp cancel_thread_activity_retry(%{thread_activity_retry_ref: nil} = state), do: state
-
-  defp cancel_thread_activity_retry(%{thread_activity_retry_ref: ref} = state) do
-    _ = Process.cancel_timer(ref)
-    %{state | thread_activity_retry_ref: nil}
-  end
-
-  @spec start_thread_activity_reconciliation(state()) :: state()
-  defp start_thread_activity_reconciliation(%{thread_activity_reconciliation: %{} = running} = state) do
-    %{state | thread_activity_reconciliation: %{running | rerun?: true}}
-  end
-
-  defp start_thread_activity_reconciliation(%{thread_activity_observer_key: key} = state) when not is_nil(key) do
-    case Map.get(state.clients, key) do
-      client when is_pid(client) ->
-        task =
-          Task.Supervisor.async_nolink(CodexEx.TaskSupervisor, fn ->
-            reconcile_local_thread_activity(client)
-          end)
-
-        state
-        |> cancel_thread_activity_retry()
-        |> Map.put(:thread_activity_reconciliation, %{task: task, client: client, rerun?: false})
-
-      _missing ->
-        state
-    end
-  end
-
-  defp start_thread_activity_reconciliation(state), do: state
-
-  @spec finish_thread_activity_reconciliation(state(), :ok | {:error, term()}) :: state()
-  defp finish_thread_activity_reconciliation(state, result) do
-    running = state.thread_activity_reconciliation
-    current_client = Map.get(state.clients, state.thread_activity_observer_key)
-    state = %{state | thread_activity_reconciliation: nil}
-
-    cond do
-      running.rerun? or running.client != current_client -> start_thread_activity_reconciliation(state)
-      result == :ok -> state
-      true -> schedule_thread_activity_retry(state)
-    end
-  end
-
-  defp reconcile_local_thread_activity(client) do
-    case {
-      Client.broadcast_active_threads(client),
-      run_thread_activity_recovery()
-    } do
-      {:ok, {:ok, _summary}} -> :ok
-      {{:error, _reason} = error, _recovery_result} -> error
-      {_thread_result, {:error, _reason} = error} -> error
-    end
-  end
-
-  # Host applications can hook local thread-activity reconciliation (for
-  # example to recover persisted sessions) via
-  # `config :codex_ex, thread_activity_recovery: {module, function, args}`.
-  # The hook must return `{:ok, term()}` or `{:error, term()}`.
-  defp run_thread_activity_recovery do
-    case Application.get_env(:codex_ex, :thread_activity_recovery) do
-      {module, function, args} ->
-        # The hook lives in the host application, which may still be booting;
-        # surface failures as errors so reconciliation retries instead of dying.
-        try do
-          apply(module, function, args)
-        rescue
-          error -> {:error, error}
-        catch
-          :exit, reason -> {:error, {:exit, reason}}
-        end
-
-      nil ->
-        {:ok, :no_recovery_hook}
-    end
-  end
-
-  defp drop_key(state, key) do
-    refs =
-      state.refs
-      |> Enum.reject(fn {_ref, ref_key} -> ref_key == key end)
-      |> Map.new()
-
-    %{state | clients: Map.delete(state.clients, key), refs: refs}
   end
 
   defp normalize_key(opts) when is_list(opts) do
@@ -352,8 +163,9 @@ defmodule CodexEx.AppServer.ClientManager do
 
   defp shared_client_opts(key, opts) do
     opts
-    |> Keyword.drop([:name, :request_handler])
+    |> Keyword.delete(:request_handler)
     |> Keyword.put_new(:transport, :stdio)
+    |> Keyword.put(:name, {:via, Registry, {@registry, key}})
     |> maybe_put_remote_transport_id(key)
   end
 
@@ -404,15 +216,5 @@ defmodule CodexEx.AppServer.ClientManager do
     else
       Keyword.fetch(opts, :args)
     end
-  end
-
-  defp normalize_get_client_reply({:ok, pid}) when is_pid(pid), do: {:ok, pid}
-  defp normalize_get_client_reply({:error, _reason} = error), do: error
-  defp normalize_get_client_reply(other), do: {:error, {:unexpected_client_manager_reply, other}}
-
-  defp safe_manager_call(server, message) do
-    GenServer.call(server, message, @manager_call_timeout_ms)
-  catch
-    :exit, reason -> {:error, {:shared_client_manager_call_failed, reason}}
   end
 end
