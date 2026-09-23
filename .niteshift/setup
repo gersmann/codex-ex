@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Install the Erlang/OTP and Elixir versions pinned in .github/workflows/ci.yml,
+# then fetch and compile dependencies for development and tests.
+set -euo pipefail
+
+OTP_VERSION=28.4.1
+ELIXIR_VERSION=1.20.0
+OTP_MAJOR=${OTP_VERSION%%.*}
+
+otp_dir=/opt/erlang/$OTP_VERSION
+elixir_dir=/opt/elixir/$ELIXIR_VERSION
+
+if [ ! -x "$otp_dir/bin/erl" ]; then
+  . /etc/os-release
+  tmp=$(mktemp -d)
+  curl -fsSL --retry 3 \
+    "https://builds.hex.pm/builds/otp/ubuntu-${VERSION_ID}/OTP-${OTP_VERSION}.tar.gz" \
+    | tar -xz -C "$tmp" --strip-components=1
+  rm -rf "$otp_dir"
+  mkdir -p "$(dirname "$otp_dir")"
+  mv "$tmp" "$otp_dir"
+  (cd "$otp_dir" && ./Install -minimal "$otp_dir" >/dev/null)
+fi
+
+if [ ! -x "$elixir_dir/bin/elixir" ]; then
+  tmp=$(mktemp -d)
+  curl -fsSL --retry 3 -o "$tmp/elixir.zip" \
+    "https://github.com/elixir-lang/elixir/releases/download/v${ELIXIR_VERSION}/elixir-otp-${OTP_MAJOR}.zip"
+  rm -rf "$elixir_dir"
+  mkdir -p "$elixir_dir"
+  unzip -q "$tmp/elixir.zip" -d "$elixir_dir"
+  rm -rf "$tmp"
+fi
+
+for bin in erl erlc escript; do ln -sf "$otp_dir/bin/$bin" /usr/local/bin/$bin; done
+# Wrappers rather than symlinks: sandbox shells run with a POSIX locale, so
+# enable UTF-8 filename encoding for the VM that Elixir otherwise warns about.
+for bin in elixir elixirc iex mix; do
+  rm -f /usr/local/bin/$bin
+  printf '#!/bin/sh\nexport ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-+fnu}"\nexec %s "$@"\n' \
+    "$elixir_dir/bin/$bin" > /usr/local/bin/$bin
+  chmod +x /usr/local/bin/$bin
+done
+
+cd "$NITESHIFT_CHECKOUT_ROOT/codex-ex"
+mix local.hex --force --if-missing
+mix local.rebar --force --if-missing
+mix deps.get
+mix compile
+MIX_ENV=test mix compile
