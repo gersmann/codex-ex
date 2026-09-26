@@ -9,6 +9,8 @@ defmodule CodexEx.AppServer.Session do
   alias CodexEx.AppServer.Transport
   alias CodexEx.AppServer.WebSocketTransport
 
+  require Logger
+
   @default_timeout 15_000
   @max_request_timeout_ms 30 * 60 * 1_000
   @request_call_grace_ms 1_000
@@ -26,7 +28,12 @@ defmodule CodexEx.AppServer.Session do
           | :session_closed
           | {:protocol_error, term()}
           | {:transport_closed, term()}
-  @type pending_request :: %{from: GenServer.from(), timer_ref: reference() | nil}
+  @type pending_request :: %{
+          from: GenServer.from(),
+          timer_ref: reference() | nil,
+          method: binary(),
+          started_at: integer()
+        }
   @type initialize_bootstrap :: :fresh | {:reattached, map(), boolean()}
   @type terminal_close :: {term(), non_neg_integer()} | nil
   @type state :: %{
@@ -138,6 +145,7 @@ defmodule CodexEx.AppServer.Session do
   @spec init(keyword()) ::
           {:ok, state()} | {:ok, state(), {:continue, term()}} | {:stop, term()}
   def init(opts) do
+    Logger.metadata(Keyword.take(opts, [:runner_id, :workspace_id, :transport_id]))
     notification_target = Keyword.get(opts, :notification_target, self())
     transport_module = transport_module(Keyword.get(opts, :transport, :stdio))
     transport_opts = Keyword.put(opts, :owner, self())
@@ -258,7 +266,7 @@ defmodule CodexEx.AppServer.Session do
 
     case send_payload(state, payload) do
       :ok ->
-        pending = Map.put(state.pending, id, pending_request(from, id, timeout))
+        pending = Map.put(state.pending, id, pending_request(from, id, method, timeout))
         {:noreply, %{state | next_id: id + 1, pending: pending}}
 
       {:error, {:encode_failed, reason}} ->
@@ -649,8 +657,16 @@ defmodule CodexEx.AppServer.Session do
   end
 
   defp reply_all_pending(state, reply) do
-    Enum.each(state.pending, fn {_id, from} ->
-      reply_pending_request(from, reply)
+    Enum.each(state.pending, fn {id, request} ->
+      case reply do
+        {:error, {:transport_closed, reason}} ->
+          log_request_failure(id, request, transport_failure_class(reason), map_size(state.pending))
+
+        _other ->
+          :ok
+      end
+
+      reply_pending_request(request, reply)
     end)
 
     %{state | pending: %{}}
@@ -697,12 +713,22 @@ defmodule CodexEx.AppServer.Session do
   end
 
   defp session_close_reason(:remote_client_disconnected), do: :normal
+
+  defp session_close_reason({:remote_session_closed, "encoded codex session event is " <> _} = reason),
+    do: {:shutdown, {:transport_closed, reason}}
+
   defp session_close_reason({:remote_session_closed, _reason}), do: :normal
   defp session_close_reason({:send_failed, %Mint.TransportError{reason: :closed}}), do: :normal
   defp session_close_reason(reason), do: {:transport_closed, reason}
 
-  defp pending_request(from, id, timeout) when is_integer(timeout) and timeout >= 0 do
-    %{from: from, timer_ref: Process.send_after(self(), {:request_timeout, id}, timeout)}
+  @spec pending_request(GenServer.from(), pos_integer(), binary(), non_neg_integer()) :: pending_request()
+  defp pending_request(from, id, method, timeout) when is_integer(timeout) and timeout >= 0 do
+    %{
+      from: from,
+      timer_ref: Process.send_after(self(), {:request_timeout, id}, timeout),
+      method: method,
+      started_at: System.monotonic_time(:millisecond)
+    }
   end
 
   defp bounded_request_timeout(:infinity), do: @max_request_timeout_ms
@@ -723,12 +749,35 @@ defmodule CodexEx.AppServer.Session do
         :unhandled
 
       {request, pending} ->
+        log_request_failure(id, request, :request_timeout, map_size(state.pending))
         reply_pending_request(request, {:error, :request_timeout})
         {:handled, %{state | pending: pending}}
     end
   end
 
   defp timeout_pending_request(_state, _message), do: :unhandled
+
+  # Log one bounded record per abandoned request so the daemon's transport/id
+  # pair identifies its method even when several requests share a connection.
+  @spec log_request_failure(pos_integer(), pending_request(), atom(), non_neg_integer()) :: :ok
+  defp log_request_failure(id, request, failure, pending_count) do
+    metadata = Logger.metadata()
+
+    Logger.warning(
+      "codex.request.failed session_pid=#{inspect(self())} " <>
+        "transport_id=#{inspect(metadata[:transport_id], printable_limit: 128)} " <>
+        "runner_id=#{inspect(metadata[:runner_id], printable_limit: 128)} " <>
+        "workspace_id=#{inspect(metadata[:workspace_id], printable_limit: 128)} " <>
+        "rpc_id=#{id} rpc_method=#{inspect(request.method, printable_limit: 128)} " <>
+        "duration_ms=#{System.monotonic_time(:millisecond) - request.started_at} " <>
+        "failure=#{failure} pending_requests=#{pending_count}"
+    )
+  end
+
+  @spec transport_failure_class(term()) :: :response_too_large | :transport_closed
+  defp transport_failure_class({:remote_session_closed, "encoded codex session event is " <> _}), do: :response_too_large
+
+  defp transport_failure_class(_reason), do: :transport_closed
 
   defp cancel_pending_timer(nil), do: :ok
 

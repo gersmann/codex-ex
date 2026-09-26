@@ -4,6 +4,19 @@ defmodule CodexEx.AppServer.ClientManagerTest do
   alias CodexEx.AppServer.ClientManager
   alias CodexEx.AppServer.MockTransport
 
+  defmodule RemoteTransport do
+    @moduledoc false
+
+    @spec remote_transport?() :: true
+    def remote_transport?, do: true
+
+    @spec reconcile_thread_activity(binary(), binary()) :: :ok
+    def reconcile_thread_activity(runner_id, workspace_id) do
+      Kernel.send(self(), {:reconcile_thread_activity, runner_id, workspace_id})
+      :ok
+    end
+  end
+
   setup do
     mock = start_supervised!(MockTransport)
 
@@ -61,6 +74,26 @@ defmodule CodexEx.AppServer.ClientManagerTest do
 
     refute implicit_client == explicit_nil_client
     refute implicit_client == explicit_client
+  end
+
+  test "client death repairs only its runner and workspace" do
+    key = {:client, RemoteTransport, "runner", nil, nil, nil, "workspace", nil, nil, false, false, true}
+    monitored = %{self() => key}
+    down = {:DOWN, make_ref(), :process, self(), :normal}
+
+    assert {:noreply, %{}} = ClientManager.handle_info(down, monitored)
+    assert_received {:reconcile_thread_activity, "runner", "workspace"}
+    assert {:noreply, %{}} = ClientManager.handle_info(down, %{})
+    refute_received {:reconcile_thread_activity, _, _}
+  end
+
+  test "oversized terminal does not automatically reopen the failed client" do
+    key = {:client, RemoteTransport, "runner", nil, nil, nil, "workspace", nil, nil, false, false, true}
+    reason = {:remote_session_closed, "encoded codex session event is 16777217 bytes; limit is 16777216"}
+    down = {:DOWN, make_ref(), :process, self(), {:shutdown, {:transport_closed, reason}}}
+
+    assert {:noreply, %{}} = ClientManager.handle_info(down, %{self() => key})
+    refute_received {:reconcile_thread_activity, _, _}
   end
 
   test "concurrent requests for one key share a single client", %{opts: opts} do

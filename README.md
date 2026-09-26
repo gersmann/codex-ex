@@ -121,7 +121,7 @@ config :codex_ex,
   pubsub: MyApp.PubSub
 ```
 
-To publish threads already active on the local app server, add the observer to
+To publish active threads from the local app server's catalog, add the observer to
 your own supervision tree after the PubSub and anything its recovery hook needs:
 
 ```elixir
@@ -136,10 +136,26 @@ children = [
 
 `CodexEx.ThreadActivityObserver.reconcile/0` re-publishes on demand.
 
+`Client.broadcast_active_threads(client, cwd: "/exact/worktree")` scans the
+unarchived catalog in pages and publishes full active snapshots as
+`{:codex_thread_discovered, {client, runner_id, workspace_id}, snapshot}`.
+Omit `cwd:` for the local observer's global catalog scan. The exact directory
+filter is sent on every page; all supported source kinds and `useStateDbOnly`
+remain enabled. Live active-status notifications still publish thread IDs as
+`{:codex_thread_active, origin, thread_id}`.
+
+Hosts that need bounded observation use
+`Client.each_active_thread(client, callback, cwd: "/exact/worktree")` instead.
+The callback receives one `ThreadSnapshot` at a time and returns `:ok` or
+`{:error, reason}`. It runs synchronously before the next snapshot or page;
+an error stops the scan and is returned to the caller. Both discovery APIs log
+one summary with scope, pages requested, rows fetched, active callbacks
+attempted, elapsed milliseconds, and outcome; no paths or thread bodies.
+
 Custom transports implement the `CodexEx.AppServer.Transport` behaviour and are
 passed as the `:transport` option. Remote transports (sessions that outlive the
 node) additionally implement the optional callbacks `remote_transport?/0`,
-`reconcile_thread_activity/1`, `acknowledge/2`, `acknowledge_replay_gap/2`, and
+`reconcile_thread_activity/2`, `acknowledge/2`, `acknowledge_replay_gap/2`, and
 `session_bootstrap/1`.
 
 ---
@@ -224,7 +240,14 @@ answers with `Client.reply_request/4`, which sends the response through
 
 Pools `Client` processes by connection identity through `CodexEx.ClientRegistry`.
 The GenServer itself only monitors clients so a dead remote client triggers its
-transport's `reconcile_thread_activity/1`.
+transport's `reconcile_thread_activity(runner_id, workspace_id)`, preserving the
+failed client's workspace scope.
+
+The known daemon event-size-limit close is preserved through Session/Client
+shutdown, so an outstanding API call retains the same transport error even if
+the client exits before its worker replies. This close does not trigger
+automatic client-death reconciliation; the host can explicitly reconcile after
+the cause changes. Other remote closes retain their existing lifecycle.
 
 The effective identity includes transport, launcher, workspace/runner,
 initialize, and protocol options. Remote daemon transport ids intentionally
@@ -249,6 +272,11 @@ the transport handle, and ordered transport acknowledgement state.
 - Per-request timeouts via `Process.send_after/3`, max 30 minutes
 - On transport close: replies all pending requests with
   `{:error, {:transport_closed, reason}}`, then stops
+
+Request timeout and transport-close warnings include the stable transport ID,
+RPC ID, method, elapsed milliseconds, and pending count. They log no request
+parameters or arbitrary close-reason bodies, and successful requests are not
+logged individually.
 
 **Transport selection (via `:transport` option):**
 - `:stdio` → `StdioTransport`

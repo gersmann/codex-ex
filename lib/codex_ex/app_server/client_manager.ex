@@ -69,6 +69,16 @@ defmodule CodexEx.AppServer.ClientManager do
   def handle_cast({:monitor, key, pid}, monitored), do: {:noreply, monitor(monitored, key, pid)}
 
   @impl true
+  def handle_info(
+        {:DOWN, _ref, :process, pid,
+         {:shutdown, {:transport_closed, {:remote_session_closed, "encoded codex session event is " <> _}}}},
+        monitored
+      ) do
+    # Automatically reopening after an oversized response can reproduce the same error.
+    # Explicit reconciliation or a new connection can retry after the cause changes.
+    {:noreply, Map.delete(monitored, pid)}
+  end
+
   def handle_info({:DOWN, _ref, :process, pid, _reason}, monitored) do
     case Map.pop(monitored, pid) do
       {nil, monitored} ->
@@ -129,13 +139,13 @@ defmodule CodexEx.AppServer.ClientManager do
   defp remote_transport?(_transport), do: false
 
   defp reconcile_remote_thread_activity(
-         {:client, transport, runner_id, _url, _executable, _args, _workspace_id, _workspace_root, _initialize_params,
+         {:client, transport, runner_id, _url, _executable, _args, workspace_id, _workspace_root, _initialize_params,
           _strict_protocol, _proxy_only, _broadcasts_thread_activity}
        )
-       when is_binary(runner_id) do
+       when is_binary(runner_id) and is_binary(workspace_id) do
     if remote_transport?(transport) and
-         function_exported?(transport, :reconcile_thread_activity, 1) do
-      transport.reconcile_thread_activity(runner_id)
+         function_exported?(transport, :reconcile_thread_activity, 2) do
+      transport.reconcile_thread_activity(runner_id, workspace_id)
     else
       :ok
     end

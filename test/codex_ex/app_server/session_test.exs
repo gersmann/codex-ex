@@ -124,10 +124,28 @@ defmodule CodexEx.AppServer.SessionTest do
     session =
       start_supervised!({
         Session,
-        [transport: MockTransport, mock_pid: mock, notification_target: self()]
+        [
+          transport: MockTransport,
+          mock_pid: mock,
+          notification_target: self(),
+          transport_id: "timeout-transport",
+          runner_id: "timeout-runner",
+          workspace_id: "timeout-workspace"
+        ]
       })
 
-    assert {:error, :request_timeout} = Session.request(session, "slow", %{}, 50)
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, :request_timeout} = Session.request(session, "slow", %{"secret" => "private-prompt"}, 50)
+      end)
+
+    assert log =~ "codex.request.failed"
+    assert log =~ "transport_id=\"timeout-transport\""
+    assert log =~ "runner_id=\"timeout-runner\""
+    assert log =~ "workspace_id=\"timeout-workspace\""
+    assert log =~ "rpc_id=1 rpc_method=\"slow\" duration_ms="
+    assert log =~ "failure=request_timeout pending_requests=1"
+    refute log =~ "private-prompt"
 
     assert_receive {:codex_app_server_notification, %{"method" => "slow/started", "params" => %{}}}
 
@@ -137,6 +155,60 @@ defmodule CodexEx.AppServer.SessionTest do
                    2_000
 
     assert :sys.get_state(session).pending == %{}
+  end
+
+  test "transport closure identifies every pending method without logging payloads or arbitrary reasons", %{mock: mock} do
+    MockTransport.configure(mock, slow_delay_ms: 5_000)
+
+    for {reason, failure} <- [
+          {"encoded codex session event is 16777217 bytes; limit is 16777216", "response_too_large"},
+          {%{"message" => "private-close-reason"}, "transport_closed"}
+        ] do
+      session =
+        start_supervised!(
+          Supervisor.child_spec(
+            {Session,
+             transport: MockTransport, mock_pid: mock, notification_target: self(), transport_id: "closed-transport"},
+            id: failure,
+            restart: :temporary
+          )
+        )
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          tasks =
+            for _ <- 1..2 do
+              task = Task.async(fn -> Session.request(session, "slow", %{"secret" => "private-request"}, 10_000) end)
+              assert_receive {:codex_app_server_notification, %{"method" => "slow/started"}}
+              task
+            end
+
+          send(session, {:mock_closed, {:remote_session_closed, reason}})
+
+          for task <- tasks do
+            assert Task.await(task) == {:error, {:transport_closed, {:remote_session_closed, reason}}}
+          end
+        end)
+
+      assert log =~ "transport_id=\"closed-transport\""
+      assert log =~ "rpc_id=1 rpc_method=\"slow\" duration_ms="
+      assert log =~ "rpc_id=2 rpc_method=\"slow\" duration_ms="
+      assert log =~ "failure=#{failure} pending_requests=2"
+      refute log =~ "private-request"
+      refute log =~ "private-close-reason"
+    end
+  end
+
+  test "bootstrap oversized terminal retains its cause through acknowledgement", %{mock: mock} do
+    assert {:ok, state} = Session.init(transport: MockTransport, mock_pid: mock, notification_target: self())
+    reason = {:remote_session_closed, "encoded codex session event is 16777217 bytes; limit is 16777216"}
+    bootstrap = %{replay_gap: nil, replay: [], pending_requests: [], terminal_close: {reason, 1}}
+
+    assert {:noreply, state} = Session.handle_continue({:replay, bootstrap}, state)
+    assert_receive {:codex_app_server_transport_closed, ^reason, 1}
+
+    assert {:stop, {:shutdown, {:transport_closed, ^reason}}, :ok, _state} =
+             Session.handle_call({:acknowledge_transport_sequence, 1}, {self(), make_ref()}, state)
   end
 
   test "fails fast on invalid json-rpc payloads from transport", %{mock: mock} do

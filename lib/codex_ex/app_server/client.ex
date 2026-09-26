@@ -83,6 +83,8 @@ defmodule CodexEx.AppServer.Client do
   alias CodexEx.AppServer.TurnStream
   alias CodexEx.MapHelpers
 
+  require Logger
+
   @default_timeout 15_000
   @thread_history_timeout 60_000
   @turn_timeout 30 * 60 * 1_000
@@ -146,6 +148,9 @@ defmodule CodexEx.AppServer.Client do
           | {:global, term()}
           | {:via, atom(), term()}
   @type t :: pid() | registered_name()
+  @type thread_activity_origin :: {pid(), binary() | nil, binary() | nil}
+  @type active_thread_callback :: (ThreadSnapshot.t() -> :ok | {:error, term()})
+  @type thread_activity_counts :: %{pages: non_neg_integer(), threads: non_neg_integer(), active: non_neg_integer()}
   @type request_timeout :: timeout()
   @type request_result :: {:ok, Message.supported_reply_payload()} | {:error, term()}
   @type client_call_error :: {:client_call_failed, term()} | {:defer_failed, term()}
@@ -273,14 +278,29 @@ defmodule CodexEx.AppServer.Client do
     end
   end
 
-  @doc "Publishes active threads already loaded by the connected app server."
-  @spec broadcast_active_threads(t()) :: :ok | {:error, term()}
-  def broadcast_active_threads(client) do
+  @doc "Publishes active thread snapshots, optionally scoped to an exact working directory."
+  @spec broadcast_active_threads(t(), cwd: binary()) :: :ok | {:error, term()}
+  def broadcast_active_threads(client, opts \\ []) when is_list(opts) do
+    with {:ok, origin} <- thread_activity_origin(client) do
+      scan_active_threads(client, origin, &broadcast_thread_discovered(origin, &1), opts)
+    end
+  end
+
+  @doc "Visits active snapshots synchronously; an error stops the scan before the next snapshot or page."
+  @spec each_active_thread(t(), active_thread_callback(), cwd: binary()) :: :ok | {:error, term()}
+  def each_active_thread(client, callback, opts \\ []) when is_function(callback, 1) and is_list(opts) do
+    with {:ok, origin} <- thread_activity_origin(client) do
+      scan_active_threads(client, origin, callback, opts)
+    end
+  end
+
+  @spec thread_activity_origin(t()) :: {:ok, thread_activity_origin()} | {:error, term()}
+  defp thread_activity_origin(client) do
     case safe_client_call(client_server(client), :thread_activity_origin, @default_timeout) do
       {:ok, {origin_client, runner_id, workspace_id} = origin}
       when is_pid(origin_client) and (is_binary(runner_id) or is_nil(runner_id)) and
              (is_binary(workspace_id) or is_nil(workspace_id)) ->
-        broadcast_active_thread_pages(client, origin, nil, %{})
+        {:ok, origin}
 
       {:error, _reason} = error ->
         error
@@ -1830,10 +1850,15 @@ defmodule CodexEx.AppServer.Client do
 
   defp maybe_broadcast_thread_activity(_message, _origin), do: :ok
 
-  defp broadcast_active_thread_pages(client, origin, cursor, seen_cursors) do
+  @spec scan_active_threads(t(), thread_activity_origin(), active_thread_callback(), keyword()) :: :ok | {:error, term()}
+  defp scan_active_threads(client, {_origin_client, runner_id, workspace_id}, callback, opts) do
+    started_at = System.monotonic_time(:millisecond)
+    cwd = Keyword.get(opts, :cwd)
+
     params = %{
       "archived" => false,
-      "cursor" => cursor,
+      "cursor" => nil,
+      "cwd" => cwd,
       "limit" => @thread_activity_page_size,
       "sortDirection" => "desc",
       "sortKey" => "recency_at",
@@ -1841,36 +1866,69 @@ defmodule CodexEx.AppServer.Client do
       "useStateDbOnly" => true
     }
 
-    with {:ok, %{data: snapshots, next_cursor: next_cursor}} <- list_threads(client, params) do
-      Enum.each(snapshots, fn
-        %ThreadSnapshot{id: thread_id, status: "active"} when is_binary(thread_id) ->
-          broadcast_thread_active(origin, thread_id)
+    {result, counts} =
+      scan_active_thread_pages(client, callback, params, %{}, %{pages: 0, threads: 0, active: 0})
 
-        _inactive ->
-          :ok
-      end)
+    Logger.info(
+      "codex.thread_activity.scan runner_id=#{inspect(runner_id)} workspace_id=#{inspect(workspace_id)} " <>
+        "scope=#{if is_nil(cwd), do: "global", else: "cwd"} " <>
+        "pages=#{counts.pages} threads=#{counts.threads} active=#{counts.active} " <>
+        "duration_ms=#{System.monotonic_time(:millisecond) - started_at} result=#{if result == :ok, do: "ok", else: "error"}"
+    )
 
-      continue_active_thread_pages(client, origin, next_cursor, seen_cursors)
+    result
+  end
+
+  @spec scan_active_thread_pages(t(), active_thread_callback(), map(), map(), thread_activity_counts()) ::
+          {:ok | {:error, term()}, thread_activity_counts()}
+  defp scan_active_thread_pages(client, callback, params, seen_cursors, counts) do
+    counts = %{counts | pages: counts.pages + 1}
+
+    case list_threads(client, params) do
+      {:ok, %{data: snapshots, next_cursor: next_cursor}} ->
+        {result, active} =
+          Enum.reduce_while(snapshots, {:ok, 0}, fn
+            %ThreadSnapshot{id: thread_id, status: "active"} = snapshot, {:ok, active} when is_binary(thread_id) ->
+              case callback.(snapshot) do
+                :ok -> {:cont, {:ok, active + 1}}
+                {:error, _reason} = error -> {:halt, {error, active + 1}}
+              end
+
+            _inactive, counts ->
+              {:cont, counts}
+          end)
+
+        counts = %{counts | threads: counts.threads + length(snapshots), active: counts.active + active}
+
+        case result do
+          :ok -> continue_active_thread_pages(client, callback, %{params | "cursor" => next_cursor}, seen_cursors, counts)
+          {:error, _reason} = error -> {error, counts}
+        end
+
+      {:error, _reason} = error ->
+        {error, counts}
     end
   end
 
-  defp continue_active_thread_pages(_client, _origin, nil, _seen_cursors), do: :ok
+  defp continue_active_thread_pages(_client, _callback, %{"cursor" => nil}, _seen_cursors, counts), do: {:ok, counts}
 
-  defp continue_active_thread_pages(client, origin, cursor, seen_cursors) when is_binary(cursor) do
+  defp continue_active_thread_pages(client, callback, %{"cursor" => cursor} = params, seen_cursors, counts)
+       when is_binary(cursor) do
     if Map.has_key?(seen_cursors, cursor) do
-      {:error, {:protocol_error, {:repeated_thread_list_cursor, cursor}}}
+      {{:error, {:protocol_error, {:repeated_thread_list_cursor, cursor}}}, counts}
     else
-      broadcast_active_thread_pages(
+      scan_active_thread_pages(
         client,
-        origin,
-        cursor,
-        Map.put(seen_cursors, cursor, true)
+        callback,
+        params,
+        Map.put(seen_cursors, cursor, true),
+        counts
       )
     end
   end
 
-  defp continue_active_thread_pages(_client, _origin, cursor, _seen_cursors),
-    do: {:error, {:protocol_error, {:invalid_thread_list_cursor, cursor}}}
+  defp continue_active_thread_pages(_client, _callback, %{"cursor" => cursor}, _seen_cursors, counts),
+    do: {{:error, {:protocol_error, {:invalid_thread_list_cursor, cursor}}}, counts}
 
   defp broadcast_thread_active(origin, thread_id) when is_binary(thread_id) do
     broadcast_thread_activity({:codex_thread_active, origin, thread_id})
@@ -2168,6 +2226,11 @@ defmodule CodexEx.AppServer.Client do
   defp safe_client_call(client, message, timeout) do
     GenServer.call(client, message, timeout)
   catch
+    :exit,
+    {{:shutdown, {:transport_closed, {:remote_session_closed, "encoded codex session event is " <> _} = reason}},
+     {GenServer, :call, _args}} ->
+      {:error, {:transport_closed, reason}}
+
     :exit, reason ->
       {:error, {:client_call_failed, reason}}
   end

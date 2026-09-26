@@ -215,7 +215,114 @@ defmodule CodexEx.AppServer.ClientTest do
     assert_receive {:mock_thread_list, %{"sourceKinds" => source_kinds}}
     assert "exec" in source_kinds
     assert "unknown" in source_kinds
-    assert_receive {:codex_thread_active, {^client, nil, nil}, ^thread_id}
+    assert_receive {:codex_thread_discovered, {^client, nil, nil}, %ThreadSnapshot{id: ^thread_id, status: "active"}}
+  end
+
+  test "reconciliation scopes every page to the exact cwd and retains active snapshots", %{mock: mock} do
+    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
+    cwd = "/tmp/discovery-scope"
+    assert {:ok, thread} = Client.start_thread(client, %{"cwd" => cwd})
+    MockTransport.configure(mock, notify: self(), thread_not_found_on_read: true)
+
+    :sys.replace_state(mock, fn state ->
+      template = Map.fetch!(state.threads, thread.id)
+
+      inactive =
+        Map.new(1..100, fn index ->
+          id = "inactive-#{index}"
+          {id, Map.merge(template, %{"id" => id, "status" => "idle", "updatedAt" => index})}
+        end)
+
+      active = Map.merge(template, %{"id" => "active-late", "status" => "active", "updatedAt" => 0})
+      other = Map.merge(active, %{"id" => "other-directory", "cwd" => cwd <> "/child"})
+      archived = Map.merge(template, %{"id" => "archived", "status" => "archived"})
+
+      %{
+        state
+        | threads: Map.merge(inactive, %{"active-late" => active, "other-directory" => other, "archived" => archived})
+      }
+    end)
+
+    assert :ok = Client.subscribe_thread_activity()
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = Client.broadcast_active_threads(client, cwd: cwd)
+      end)
+
+    assert_receive {:mock_thread_list, %{"cwd" => ^cwd} = first_page}
+    refute Map.has_key?(first_page, "cursor")
+    assert_receive {:mock_thread_list, %{"cwd" => ^cwd, "cursor" => "100"} = second_page}
+    assert Map.delete(first_page, "cursor") == Map.delete(second_page, "cursor")
+    assert first_page["sourceKinds"] == ["cli", "vscode", "exec", "appServer", "unknown"]
+    assert first_page["useStateDbOnly"] == true
+    assert first_page["archived"] == false
+    assert first_page["limit"] == 100
+
+    assert_receive {:codex_thread_discovered, {^client, nil, nil}, %ThreadSnapshot{id: "active-late", cwd: ^cwd}}
+    refute_receive {:codex_thread_discovered, {^client, nil, nil}, _}, 50
+    refute_receive {:codex_thread_active, {^client, nil, nil}, _}, 50
+    assert log =~ "scope=cwd pages=2 threads=101 active=1 duration_ms="
+    assert log =~ "result=ok"
+    refute log =~ cwd
+  end
+
+  test "failed reconciliation reports a bounded summary without swallowing the error", %{mock: mock} do
+    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
+    MockTransport.configure(mock, list_threads_error: true)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, {:remote_error, _}} = Client.broadcast_active_threads(client)
+      end)
+
+    assert log =~ "scope=global pages=1 threads=0 active=0 duration_ms="
+    assert log =~ "result=error"
+  end
+
+  test "active snapshot callbacks apply backpressure and stop pagination on error", %{mock: mock} do
+    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
+    cwd = "/tmp/bounded-discovery"
+    assert {:ok, thread} = Client.start_thread(client, %{"cwd" => cwd})
+    MockTransport.configure(mock, notify: self())
+
+    :sys.replace_state(mock, fn state ->
+      template = Map.fetch!(state.threads, thread.id)
+
+      threads =
+        Map.new(1..101, fn index ->
+          id = "active-#{index}"
+          {id, Map.merge(template, %{"id" => id, "status" => "active", "updatedAt" => index})}
+        end)
+
+      %{state | threads: threads}
+    end)
+
+    test = self()
+
+    task =
+      Task.async(fn ->
+        Client.each_active_thread(
+          client,
+          fn snapshot ->
+            send(test, {:observing, snapshot})
+
+            receive do
+              :reject -> {:error, :observation_failed}
+            end
+          end,
+          cwd: cwd
+        )
+      end)
+
+    assert_receive {:mock_thread_list, %{"cwd" => ^cwd}}
+    assert_receive {:observing, %ThreadSnapshot{id: "active-101", cwd: ^cwd}}
+    refute_receive {:observing, _}, 50
+    refute_receive {:mock_thread_list, _}, 50
+    send(task.pid, :reject)
+    assert Task.await(task) == {:error, :observation_failed}
+    refute_receive {:observing, _}, 50
+    refute_receive {:mock_thread_list, _}, 50
   end
 
   test "sequenced notifications are routed before their transport acknowledgement", %{mock: mock} do
@@ -498,6 +605,33 @@ defmodule CodexEx.AppServer.ClientTest do
     client_ref = Process.monitor(client)
     send(client, {:codex_app_server_transport_closed, close_reason, 1})
     assert_receive {:DOWN, ^client_ref, :process, ^client, :normal}, 500
+  end
+
+  test "oversized terminal cause survives client shutdown before its deferred worker replies", %{mock: mock} do
+    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
+    session = :sys.get_state(client).session
+    :ok = :sys.suspend(mock)
+    assert 1 = :erlang.trace(session, true, [:receive, {:tracer, self()}])
+    task = Task.async(fn -> Client.list_threads(client) end)
+
+    assert_receive {:trace, ^session, :receive,
+                    {:"$gen_call", {worker, _tag}, {:request, "thread/list", _params, _timeout}}}
+
+    assert :erlang.suspend_process(worker)
+    assert 1 = :erlang.trace(session, false, [:receive])
+
+    try do
+      assert map_size(:sys.get_state(session).pending) == 1
+      reason = {:remote_session_closed, "encoded codex session event is 16777217 bytes; limit is 16777216"}
+      client_ref = Process.monitor(client)
+      send(session, {:mock_closed, reason, 1})
+
+      assert Task.await(task) == {:error, {:transport_closed, reason}}
+      assert_receive {:DOWN, ^client_ref, :process, ^client, {:shutdown, {:transport_closed, ^reason}}}
+    after
+      :erlang.resume_process(worker)
+      :sys.resume(mock)
+    end
   end
 
   test "replying removes a pending request from subscriber replay", %{mock: mock} do

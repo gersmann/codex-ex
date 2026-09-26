@@ -4,6 +4,7 @@ defmodule CodexEx.ThreadActivityObserverTest do
   alias CodexEx.AppServer.Client
   alias CodexEx.AppServer.ClientManager
   alias CodexEx.AppServer.MockTransport
+  alias CodexEx.AppServer.ThreadSnapshot
   alias CodexEx.ThreadActivityObserver
 
   setup do
@@ -37,13 +38,13 @@ defmodule CodexEx.ThreadActivityObserverTest do
 
     retry_ref = await_state(observer, & &1.retry_ref)
     observed = :sys.get_state(observer).client
-    refute_receive {:codex_thread_active, {^observed, nil, nil}, ^thread_id}, 50
+    refute_receive {:codex_thread_discovered, {^observed, nil, nil}, %ThreadSnapshot{id: ^thread_id}}, 50
 
     assert is_integer(Process.cancel_timer(retry_ref))
     send(observer, :retry)
 
     assert_receive {:mock_thread_list, _params}, 500
-    assert_receive {:codex_thread_active, {^observed, nil, nil}, ^thread_id}, 500
+    assert_receive {:codex_thread_discovered, {^observed, nil, nil}, %ThreadSnapshot{id: ^thread_id}}, 500
   end
 
   test "coalesces reconciliation, follows a replaced client and retries a crashed task", %{

@@ -75,6 +75,7 @@ defmodule CodexEx.AppServer.MockTransport do
   # Raw bytes are only used by malformed-JSON fault injection.
   def normalize_message({:mock_data, data}, _handle) when is_binary(data), do: {:data, data}
   def normalize_message({:mock_closed, reason}, _handle), do: {:closed, reason}
+  def normalize_message({:mock_closed, reason, sequence}, _handle), do: {:closed, reason, sequence}
   def normalize_message(_message, _handle), do: :ignore
 
   # ---------------------------------------------------------------------------
@@ -291,6 +292,7 @@ defmodule CodexEx.AppServer.MockTransport do
       archived_filter = Map.get(params, "archived")
       cwd_filter = Map.get(params, "cwd")
       limit = Map.get(params, "limit") || 20
+      offset = mock_cursor_offset(Map.get(params, "cursor"))
 
       threads =
         state.threads
@@ -298,9 +300,12 @@ defmodule CodexEx.AppServer.MockTransport do
         |> maybe_filter_cwd(cwd_filter)
         |> maybe_filter_archived(archived_filter)
         |> Enum.sort_by(&Map.get(&1, "updatedAt", 0), :desc)
-        |> Enum.take(limit)
 
-      emit(state, result(id, %{"data" => threads, "nextCursor" => nil}))
+      page = Enum.slice(threads, offset, limit)
+      next_offset = offset + length(page)
+      next_cursor = if next_offset < length(threads), do: Integer.to_string(next_offset)
+
+      emit(state, result(id, %{"data" => page, "nextCursor" => next_cursor}))
       state
     end
   end
