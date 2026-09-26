@@ -468,6 +468,7 @@ defmodule CodexEx.AppServer.MockTransport do
           do: Enum.reverse(turns),
           else: turns
 
+      turns = mock_turns_for_items_view(turns, Map.get(params, "itemsView"))
       {page, next_cursor} = mock_thread_turns_page(state, params, turns)
 
       emit(
@@ -481,6 +482,50 @@ defmodule CodexEx.AppServer.MockTransport do
     end
 
     state
+  end
+
+  defp handle_method("thread/items/list", id, params, state) do
+    thread_id = Map.fetch!(params, "threadId")
+    turn_id = Map.fetch!(params, "turnId")
+
+    if notify = Map.get(state.config, :notify) do
+      Kernel.send(notify, {:mock_thread_items_list, params})
+    end
+
+    case {Map.get(state.config, :thread_items_error_cursor), Map.get(params, "cursor")} do
+      {configured_cursor, cursor} when is_binary(cursor) and cursor == configured_cursor ->
+        emit(state, error(id, -32_603, "mock thread items list failed at cursor #{cursor}"))
+        %{state | config: Map.delete(state.config, :thread_items_error_cursor)}
+
+      _other ->
+        thread = Map.get(state.threads, thread_id, make_thread(thread_id))
+
+        case Enum.find(Map.get(thread, "turns", []), &(Map.get(&1, "id") == turn_id)) do
+          %{} = turn ->
+            entries = Enum.map(Map.get(turn, "items", []), &%{"item" => &1, "turnId" => turn_id})
+
+            entries =
+              if Map.get(params, "sortDirection", "desc") == "desc",
+                do: Enum.reverse(entries),
+                else: entries
+
+            {page, next_cursor} = mock_thread_items_page(state, params, entries)
+
+            emit(
+              state,
+              result(id, %{
+                "backwardsCursor" => nil,
+                "data" => page,
+                "nextCursor" => next_cursor
+              })
+            )
+
+          nil ->
+            emit(state, error(id, -32_602, "turn not found: #{turn_id}"))
+        end
+
+        state
+    end
   end
 
   defp handle_method("thread/fork", id, params, state) do
@@ -1800,6 +1845,28 @@ defmodule CodexEx.AppServer.MockTransport do
     {page, next_cursor}
   end
 
+  defp mock_thread_items_page(%{config: %{thread_items_cursor_mode: :repeat}}, _params, entries),
+    do: {Enum.take(entries, 1), "same"}
+
+  defp mock_thread_items_page(_state, params, entries) do
+    offset = mock_cursor_offset(Map.get(params, "cursor"))
+    page_size = Map.get(params, "limit", 50)
+    page = Enum.slice(entries, offset, page_size)
+    next_offset = offset + length(page)
+    next_cursor = if next_offset < length(entries), do: Integer.to_string(next_offset)
+    {page, next_cursor}
+  end
+
+  defp mock_turns_for_items_view(turns, "notLoaded") do
+    Enum.map(turns, fn turn ->
+      turn
+      |> Map.put("items", [])
+      |> Map.put("itemsView", "notLoaded")
+    end)
+  end
+
+  defp mock_turns_for_items_view(turns, _items_view), do: turns
+
   defp handle_thread_read(state, id, thread_id, %{"mockReadError" => true}, _include_turns) do
     emit(state, error(id, -32_021, "thread read failed: #{thread_id}", %{"source" => "mock"}))
     state
@@ -1865,8 +1932,11 @@ defmodule CodexEx.AppServer.MockTransport do
     turns =
       thread
       |> Map.get("turns", [])
-      |> Enum.reverse()
+      |> then(fn turns ->
+        if Map.get(page_params, "sortDirection", "desc") == "desc", do: Enum.reverse(turns), else: turns
+      end)
       |> Enum.take(Map.get(page_params, "limit", 1))
+      |> mock_turns_for_items_view(Map.get(page_params, "itemsView"))
 
     Map.put(response, "initialTurnsPage", %{
       "backwardsCursor" => nil,
@@ -2073,7 +2143,24 @@ defmodule CodexEx.AppServer.MockTransport do
         do: Map.delete(message, "jsonrpc"),
         else: message
 
-    Kernel.send(owner, {:mock_message, message})
+    case Map.get(config, :max_frame_bytes) do
+      max_bytes when is_integer(max_bytes) and max_bytes > 0 ->
+        encoded_bytes = byte_size(Jason.encode!(message))
+
+        if notify = Map.get(config, :notify) do
+          Kernel.send(notify, {:mock_frame_bytes, encoded_bytes})
+        end
+
+        if encoded_bytes > max_bytes do
+          Kernel.send(owner, {:mock_closed, {:frame_too_large, encoded_bytes, max_bytes}})
+        else
+          Kernel.send(owner, {:mock_message, message})
+        end
+
+      _other ->
+        Kernel.send(owner, {:mock_message, message})
+    end
+
     :ok
   end
 

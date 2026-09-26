@@ -145,14 +145,56 @@ defmodule CodexEx.AppServer.WebSocketFixtureServer do
   defp route_message(%{"id" => id, "method" => "thread/turns/list", "params" => params}, state) do
     thread_id = params["threadId"]
     turns = state.threads |> Map.get(thread_id, make_thread(thread_id)) |> Map.fetch!("turns")
+    turns = if params["sortDirection"] == "desc", do: Enum.reverse(turns), else: turns
+
+    turns =
+      if params["itemsView"] == "notLoaded" do
+        Enum.map(turns, fn turn ->
+          turn
+          |> Map.put("items", [])
+          |> Map.put("itemsView", "notLoaded")
+        end)
+      else
+        turns
+      end
 
     response = %{
       "jsonrpc" => "2.0",
       "id" => id,
       "result" => %{
         "backwardsCursor" => nil,
-        "data" => Enum.reverse(turns),
+        "data" => turns,
         "nextCursor" => nil
+      }
+    }
+
+    {:push, {:text, Jason.encode!(response)}, state}
+  end
+
+  defp route_message(%{"id" => id, "method" => "thread/items/list", "params" => params}, state) do
+    thread_id = params["threadId"]
+    turn_id = params["turnId"]
+
+    items =
+      state.threads
+      |> Map.get(thread_id, make_thread(thread_id))
+      |> Map.fetch!("turns")
+      |> Enum.find(&(&1["id"] == turn_id))
+      |> Map.fetch!("items")
+
+    items = if params["sortDirection"] == "desc", do: Enum.reverse(items), else: items
+    offset = if params["cursor"], do: String.to_integer(params["cursor"]), else: 0
+    page = Enum.slice(items, offset, params["limit"])
+    next_offset = offset + length(page)
+    next_cursor = if next_offset < length(items), do: Integer.to_string(next_offset)
+
+    response = %{
+      "jsonrpc" => "2.0",
+      "id" => id,
+      "result" => %{
+        "backwardsCursor" => nil,
+        "data" => Enum.map(page, &%{"item" => &1, "turnId" => turn_id}),
+        "nextCursor" => next_cursor
       }
     }
 

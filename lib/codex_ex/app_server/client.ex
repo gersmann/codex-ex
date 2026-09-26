@@ -50,6 +50,8 @@ defmodule CodexEx.AppServer.Client do
   alias CodexEx.AppServer.Protocol.Generated.V2.ThreadGoalSetResponse
   alias CodexEx.AppServer.Protocol.Generated.V2.ThreadInjectItemsParams
   alias CodexEx.AppServer.Protocol.Generated.V2.ThreadInjectItemsResponse
+  alias CodexEx.AppServer.Protocol.Generated.V2.ThreadItemsListParams
+  alias CodexEx.AppServer.Protocol.Generated.V2.ThreadItemsListResponse
   alias CodexEx.AppServer.Protocol.Generated.V2.ThreadListParams
   alias CodexEx.AppServer.Protocol.Generated.V2.ThreadListResponse
   alias CodexEx.AppServer.Protocol.Generated.V2.ThreadReadParams
@@ -77,6 +79,7 @@ defmodule CodexEx.AppServer.Client do
   alias CodexEx.AppServer.Session
   alias CodexEx.AppServer.Thread
   alias CodexEx.AppServer.ThreadGoal
+  alias CodexEx.AppServer.ThreadItem
   alias CodexEx.AppServer.ThreadSettings
   alias CodexEx.AppServer.ThreadSnapshot
   alias CodexEx.AppServer.Turn
@@ -90,6 +93,7 @@ defmodule CodexEx.AppServer.Client do
   @turn_timeout 30 * 60 * 1_000
   @client_call_grace_ms 1_000
   @thread_turns_page_size 10
+  @thread_items_page_size 20
   @thread_activity_page_size 100
   @default_client_info %{"name" => "app", "version" => "0.1.0"}
   @realtime_feature "features.realtime_conversation"
@@ -531,10 +535,15 @@ defmodule CodexEx.AppServer.Client do
          {:ok, overrides} <- apply_thread_settings_seed(overrides, settings_seed) do
       params = build_thread_resume_params(thread_id, overrides)
 
+      timeout =
+        if match?(%{"initialTurnsPage" => %{"itemsView" => "notLoaded"}}, params),
+          do: @thread_history_timeout,
+          else: @default_timeout
+
       safe_client_call(
         client,
-        {:thread_resume, params, settings_seed, @default_timeout},
-        call_timeout_for(@default_timeout)
+        {:thread_resume, params, settings_seed, timeout},
+        call_timeout_for(timeout)
       )
     end
   end
@@ -587,7 +596,7 @@ defmodule CodexEx.AppServer.Client do
     if (is_nil(cursor) or is_binary(cursor)) and is_integer(limit) and limit > 0 do
       params = %ThreadTurnsListParams{
         cursor: cursor,
-        items_view: "full",
+        items_view: "notLoaded",
         limit: limit,
         sort_direction: "desc",
         thread_id: thread_id
@@ -980,6 +989,7 @@ defmodule CodexEx.AppServer.Client do
         session
         |> Session.request("thread/resume", params, timeout)
         |> require_initial_turns_page(params)
+        |> hydrate_initial_turns_page(session, params, timeout)
         |> normalize_thread_result(client, settings_seed)
       end)
 
@@ -1415,6 +1425,27 @@ defmodule CodexEx.AppServer.Client do
 
   defp require_initial_turns_page(result, _params), do: result
 
+  defp hydrate_initial_turns_page(
+         {:ok, %{"thread" => %{"id" => thread_id}, "initialTurnsPage" => %{"data" => turns} = page} = payload},
+         session,
+         %{"initialTurnsPage" => %{"itemsView" => "notLoaded"}},
+         timeout
+       )
+       when is_binary(thread_id) do
+    with {:ok, turns} <- hydrate_paginated_turns(session, turns, thread_id, timeout) do
+      {:ok, Map.put(payload, "initialTurnsPage", Map.put(page, "data", turns))}
+    end
+  end
+
+  defp hydrate_initial_turns_page(
+         {:ok, payload},
+         _session,
+         %{"initialTurnsPage" => %{"itemsView" => "notLoaded"}},
+         _timeout
+       ), do: {:error, {:protocol_error, {:invalid_initial_turns_page, payload}}}
+
+  defp hydrate_initial_turns_page(result, _session, _params, _timeout), do: result
+
   defp build_thread(client, thread, options_source, settings_seed) do
     with {:ok, snapshot} <- ThreadSnapshot.from_protocol(thread),
          {:ok, turns} <- initial_thread_turns(options_source, snapshot) do
@@ -1633,7 +1664,7 @@ defmodule CodexEx.AppServer.Client do
   defp request_next_paginated_turns_page(session, thread_id, cursor, acc, seen_cursors, timeout) do
     params = %ThreadTurnsListParams{
       cursor: cursor,
-      items_view: "full",
+      items_view: "notLoaded",
       limit: @thread_turns_page_size,
       sort_direction: "desc",
       thread_id: thread_id
@@ -1672,8 +1703,8 @@ defmodule CodexEx.AppServer.Client do
       {:ok, %{} = payload} ->
         response = ThreadTurnsListResponse.decode(payload)
 
-        with {:ok, turns} <- decode_paginated_turns(response.data, params.thread_id),
-             :ok <- validate_thread_turns_cursor(response.next_cursor) do
+        with :ok <- validate_thread_turns_cursor(response.next_cursor),
+             {:ok, turns} <- hydrate_paginated_turns(session, response.data, params.thread_id, timeout) do
           {:ok, %{turns: turns, next_cursor: response.next_cursor}}
         end
 
@@ -1684,6 +1715,136 @@ defmodule CodexEx.AppServer.Client do
         error
     end
   end
+
+  defp hydrate_paginated_turns(session, turns, thread_id, timeout) when is_list(turns) do
+    turns
+    |> Enum.reduce_while({:ok, []}, fn turn, {:ok, acc} ->
+      case hydrate_paginated_turn(session, turn, thread_id, timeout) do
+        {:ok, hydrated_turn} -> {:cont, {:ok, [hydrated_turn | acc]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, hydrated_turns} -> {:ok, Enum.reverse(hydrated_turns)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp hydrate_paginated_turns(_session, other, _thread_id, _timeout),
+    do: {:error, {:protocol_error, {:unexpected_thread_turns_data, other}}}
+
+  defp hydrate_paginated_turn(session, %{} = turn, thread_id, timeout) do
+    with {:ok, %Turn{id: turn_id}} <- Turn.from_protocol(put_protocol_turn_items(turn, []), thread_id),
+         {:ok, items} <- list_paginated_turn_items(session, thread_id, turn_id, nil, [], %{}, timeout) do
+      case Turn.from_protocol(put_protocol_turn_items(turn, items), thread_id) do
+        {:ok, parsed_turn} -> {:ok, parsed_turn}
+        {:error, reason} -> {:error, {:protocol_error, reason}}
+      end
+    else
+      {:error, {:invalid_turn, _reason} = reason} -> {:error, {:protocol_error, reason}}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp hydrate_paginated_turn(_session, other, _thread_id, _timeout),
+    do: {:error, {:protocol_error, {:unexpected_thread_turn, other}}}
+
+  defp put_protocol_turn_items(%module{} = turn, items) when is_atom(module), do: Map.put(turn, :items, items)
+
+  defp put_protocol_turn_items(turn, items) when is_map(turn), do: Map.put(turn, "items", items)
+
+  defp list_paginated_turn_items(session, thread_id, turn_id, cursor, acc, seen_cursors, timeout) do
+    with {:ok, seen_cursors} <- remember_thread_items_cursor(cursor, seen_cursors) do
+      params = %ThreadItemsListParams{
+        cursor: cursor,
+        limit: @thread_items_page_size,
+        sort_direction: "asc",
+        thread_id: thread_id,
+        turn_id: turn_id
+      }
+
+      case request_thread_items_page(session, params, timeout) do
+        {:ok, %{items: items, next_cursor: next_cursor}} ->
+          acc = Enum.reduce(items, acc, &[&1 | &2])
+
+          case next_cursor do
+            nil ->
+              {:ok, Enum.reverse(acc)}
+
+            next_cursor when is_binary(next_cursor) and items == [] ->
+              {:error, {:protocol_error, :empty_thread_items_page_with_cursor}}
+
+            next_cursor when is_binary(next_cursor) ->
+              list_paginated_turn_items(
+                session,
+                thread_id,
+                turn_id,
+                next_cursor,
+                acc,
+                seen_cursors,
+                timeout
+              )
+          end
+
+        {:error, _reason} = error ->
+          error
+      end
+    end
+  end
+
+  defp remember_thread_items_cursor(nil, seen_cursors), do: {:ok, seen_cursors}
+
+  defp remember_thread_items_cursor(cursor, seen_cursors) when is_binary(cursor) do
+    if Map.has_key?(seen_cursors, cursor),
+      do: {:error, {:protocol_error, {:repeated_thread_items_cursor, cursor}}},
+      else: {:ok, Map.put(seen_cursors, cursor, true)}
+  end
+
+  defp request_thread_items_page(session, %ThreadItemsListParams{} = params, timeout) do
+    case Session.request(session, "thread/items/list", params, timeout) do
+      {:ok, %{} = payload} ->
+        response = ThreadItemsListResponse.decode(payload)
+
+        with {:ok, items} <- decode_thread_items(response.data, params.turn_id),
+             :ok <- validate_thread_items_cursor(response.next_cursor) do
+          {:ok, %{items: items, next_cursor: response.next_cursor}}
+        end
+
+      {:ok, other} ->
+        {:error, {:protocol_error, {:unexpected_thread_items_result, other}}}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp decode_thread_items(entries, turn_id) when is_list(entries) do
+    entries
+    |> Enum.reduce_while({:ok, []}, fn entry, {:ok, acc} ->
+      item = ProtocolValue.get(entry, :item)
+
+      case {ProtocolValue.get(entry, :turn_id), ThreadItem.from_protocol(item)} do
+        {^turn_id, {:ok, parsed_item}} ->
+          {:cont, {:ok, [parsed_item | acc]}}
+
+        {entry_turn_id, _result} when entry_turn_id != turn_id ->
+          {:halt, {:error, {:protocol_error, {:unexpected_thread_item_turn_id, turn_id, entry_turn_id}}}}
+
+        {_entry_turn_id, {:error, reason}} ->
+          {:halt, {:error, {:protocol_error, reason}}}
+      end
+    end)
+    |> case do
+      {:ok, items} -> {:ok, Enum.reverse(items)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp decode_thread_items(other, _turn_id), do: {:error, {:protocol_error, {:unexpected_thread_items_data, other}}}
+
+  defp validate_thread_items_cursor(cursor) when is_binary(cursor) or is_nil(cursor), do: :ok
+
+  defp validate_thread_items_cursor(cursor), do: {:error, {:protocol_error, {:invalid_thread_items_cursor, cursor}}}
 
   defp validate_thread_turns_cursor(cursor) when is_binary(cursor) or is_nil(cursor), do: :ok
 

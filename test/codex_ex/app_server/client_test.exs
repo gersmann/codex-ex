@@ -27,6 +27,9 @@ defmodule CodexEx.AppServer.ClientTest do
   alias CodexEx.AppServer.TurnStream
   alias CodexEx.AppServer.WebSocketFixturePlug
 
+  @frame_limit_bytes 7_900_000
+  @thread_items_page_size 20
+
   setup do
     mock = start_supervised!(MockTransport)
 
@@ -873,6 +876,55 @@ defmodule CodexEx.AppServer.ClientTest do
                     }}
   end
 
+  test "resume hydrates an initial turn page requested without items", %{mock: mock} do
+    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
+    assert {:ok, %Thread{id: thread_id}} = Client.start_thread(client)
+
+    item = %{
+      "id" => "item-active",
+      "status" => "inProgress",
+      "text" => "Still working",
+      "type" => "agentMessage"
+    }
+
+    :sys.replace_state(mock, fn state ->
+      thread =
+        state.threads
+        |> Map.fetch!(thread_id)
+        |> Map.put("status", "running")
+        |> Map.put("turns", [%{"id" => "turn-active", "items" => [item], "status" => "inProgress"}])
+
+      %{state | threads: Map.put(state.threads, thread_id, thread)}
+    end)
+
+    MockTransport.configure(mock, notify: self())
+
+    assert {:ok,
+            %Thread{
+              snapshot: %ThreadSnapshot{
+                turns: [%Turn{id: "turn-active", items: [%ThreadItem.AgentMessage{text: "Still working"}]}]
+              }
+            }} =
+             Client.resume_thread(client, thread_id, %{
+               "excludeTurns" => true,
+               "initialTurnsPage" => %{
+                 "itemsView" => "notLoaded",
+                 "limit" => 1,
+                 "sortDirection" => "desc"
+               }
+             })
+
+    assert_receive {:mock_thread_resume, %{"initialTurnsPage" => %{"itemsView" => "notLoaded", "limit" => 1}}}
+
+    assert_receive {:mock_thread_items_list,
+                    %{
+                      "threadId" => ^thread_id,
+                      "turnId" => "turn-active",
+                      "limit" => 20,
+                      "sortDirection" => "asc"
+                    }}
+  end
+
   test "resume fails when a requested initial turns page is omitted", %{mock: mock} do
     client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
     assert {:ok, %Thread{id: thread_id}} = Client.start_thread(client)
@@ -1108,6 +1160,139 @@ defmodule CodexEx.AppServer.ClientTest do
 
     assert {:ok, %{turns: [%Turn{id: "turn-2"}], next_cursor: "1"}} =
              Client.list_thread_turns(client, thread_id, limit: 1)
+  end
+
+  test "paginated history hydrates an oversized turn through bounded item pages", %{mock: mock} do
+    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
+    assert {:ok, %Thread{} = thread} = Client.start_thread(client)
+
+    item_text = String.duplicate("x", 4_000)
+
+    items =
+      for index <- 1..2_576 do
+        %{
+          "id" => "item-#{index}",
+          "status" => "completed",
+          "text" => item_text,
+          "type" => "agentMessage"
+        }
+      end
+
+    turn = %{"id" => "turn-large", "items" => items, "status" => "completed"}
+    assert byte_size(Jason.encode!(turn)) > @frame_limit_bytes
+    seed_thread_turns(mock, thread.id, [turn])
+    MockTransport.configure(mock, max_frame_bytes: @frame_limit_bytes, notify: self())
+
+    assert {:ok, %Thread{snapshot: %ThreadSnapshot{turns: [%Turn{id: "turn-large", items: hydrated_items}]}}} =
+             Thread.refresh(thread, include_turns: true)
+
+    assert Enum.map(hydrated_items, &ThreadItem.id/1) == Enum.map(items, &Map.fetch!(&1, "id"))
+
+    assert Enum.all?(hydrated_items, fn
+             %ThreadItem.AgentMessage{text: ^item_text} -> true
+             _ -> false
+           end)
+
+    assert_receive {:mock_frame_bytes, read_frame_bytes}
+    assert read_frame_bytes <= @frame_limit_bytes
+    assert_receive {:mock_thread_turns_list, %{"itemsView" => "notLoaded", "limit" => 10}}
+    assert_receive {:mock_frame_bytes, turns_frame_bytes}
+    assert turns_frame_bytes <= @frame_limit_bytes
+
+    page_count = div(length(items) + @thread_items_page_size - 1, @thread_items_page_size)
+
+    for page_index <- 0..(page_count - 1) do
+      expected_cursor = if page_index == 0, do: nil, else: Integer.to_string(page_index * @thread_items_page_size)
+
+      assert_receive {:mock_thread_items_list,
+                      %{
+                        "threadId" => thread_id,
+                        "turnId" => "turn-large",
+                        "limit" => @thread_items_page_size,
+                        "sortDirection" => "asc"
+                      } = params}
+
+      assert thread_id == thread.id
+      assert Map.get(params, "cursor") == expected_cursor
+      assert_receive {:mock_frame_bytes, frame_bytes}
+      assert frame_bytes <= @frame_limit_bytes
+    end
+  end
+
+  test "paginated history rejects repeated item cursors", %{mock: mock} do
+    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
+    assert {:ok, %Thread{} = thread} = Client.start_thread(client)
+
+    seed_thread_turns(mock, thread.id, [
+      %{
+        "id" => "turn-items",
+        "items" => [%{"id" => "item-one", "status" => "completed", "text" => "one", "type" => "agentMessage"}],
+        "status" => "completed"
+      }
+    ])
+
+    MockTransport.configure(mock, notify: self(), thread_items_cursor_mode: :repeat)
+
+    assert {:error, {:protocol_error, {:repeated_thread_items_cursor, "same"}}} =
+             Client.list_thread_turns(client, thread.id, limit: 1)
+
+    assert_receive {:mock_thread_items_list, %{"threadId" => thread_id} = first_page}
+    assert thread_id == thread.id
+    refute Map.has_key?(first_page, "cursor")
+    assert_receive {:mock_thread_items_list, %{"cursor" => "same"}}
+    refute_receive {:mock_thread_items_list, _params}, 0
+  end
+
+  test "paginated history discards successful item pages when a later page fails", %{mock: mock} do
+    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
+    assert {:ok, %Thread{} = thread} = Client.start_thread(client)
+
+    items =
+      for index <- 1..21 do
+        %{
+          "id" => "item-#{index}",
+          "status" => "completed",
+          "text" => "item #{index}",
+          "type" => "agentMessage"
+        }
+      end
+
+    seed_thread_turns(mock, thread.id, [%{"id" => "turn-items", "items" => items, "status" => "completed"}])
+    MockTransport.configure(mock, notify: self(), thread_items_error_cursor: "20")
+
+    assert {:error, {:remote_error, %{"code" => -32_603, "message" => "mock thread items list failed at cursor 20"}}} =
+             Thread.refresh(thread, include_turns: true)
+
+    assert_receive {:mock_thread_items_list, %{"threadId" => thread_id} = first_page}
+    assert thread_id == thread.id
+    refute Map.has_key?(first_page, "cursor")
+    assert_receive {:mock_thread_items_list, %{"cursor" => "20"}}
+  end
+
+  test "history hydration fails when one item exceeds the transport frame limit", %{mock: mock} do
+    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
+    assert {:ok, %Thread{} = thread} = Client.start_thread(client)
+
+    oversized_item = %{
+      "id" => "item-oversized",
+      "status" => "completed",
+      "text" => String.duplicate("x", @frame_limit_bytes + 100),
+      "type" => "agentMessage"
+    }
+
+    seed_thread_turns(mock, thread.id, [
+      %{"id" => "turn-oversized", "items" => [oversized_item], "status" => "completed"}
+    ])
+
+    MockTransport.configure(mock, max_frame_bytes: @frame_limit_bytes, notify: self())
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      assert {:error, {:transport_closed, {:frame_too_large, frame_bytes, @frame_limit_bytes}}} =
+               Thread.refresh(thread, include_turns: true)
+
+      assert frame_bytes > @frame_limit_bytes
+      stop_supervised!(Client)
+    end)
   end
 
   test "thread goal helpers use generated protocol and typed values", %{mock: mock} do
@@ -1535,6 +1720,13 @@ defmodule CodexEx.AppServer.ClientTest do
          :ok <- TurnStream.ensure_success(stream) do
       {:ok, stream.final_text}
     end
+  end
+
+  defp seed_thread_turns(mock, thread_id, turns) do
+    :sys.replace_state(mock, fn state ->
+      thread = Map.update!(state.threads, thread_id, &Map.put(&1, "turns", turns))
+      %{state | threads: thread}
+    end)
   end
 
   defp protocol_subscriber(parent) do
