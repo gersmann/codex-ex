@@ -29,7 +29,7 @@ defmodule CodexEx.AppServer.TurnStreamTest do
     MockTransport.configure(mock, delay_ms: 300)
 
     assert {:ok, %TurnStream{} = stream} =
-             Thread.run(
+             start_stream(
                thread,
                [%{"type" => "text", "text" => "Reply with the single word OK."}],
                %{}
@@ -65,7 +65,7 @@ defmodule CodexEx.AppServer.TurnStreamTest do
     MockTransport.configure(mock, delay_ms: 300)
 
     assert {:ok, %TurnStream{} = stream} =
-             Thread.run(
+             start_stream(
                thread,
                [%{"type" => "text", "text" => "Reply with the single word OK."}],
                %{}
@@ -95,7 +95,7 @@ defmodule CodexEx.AppServer.TurnStreamTest do
     MockTransport.configure(mock, delay_ms: 300)
 
     assert {:ok, %TurnStream{} = stream} =
-             Thread.run(
+             start_stream(
                thread,
                [%{"type" => "text", "text" => "Reply with the single word OK."}],
                %{}
@@ -129,14 +129,14 @@ defmodule CodexEx.AppServer.TurnStreamTest do
     assert {:ok, %Thread{} = thread} = Client.start_thread(client)
 
     assert {:ok, %TurnStream{} = delayed_stream} =
-             Thread.run(
+             start_stream(
                thread,
                [%{"type" => "text", "text" => "Reply with the single word FIRST."}],
                %{"mockPushDelayMs" => 250}
              )
 
     assert {:ok, %TurnStream{} = immediate_stream} =
-             Thread.run(
+             start_stream(
                thread,
                [%{"type" => "text", "text" => "Reply with the single word SECOND."}]
              )
@@ -182,7 +182,7 @@ defmodule CodexEx.AppServer.TurnStreamTest do
     MockTransport.configure(mock, delay_ms: 300)
 
     assert {:ok, %TurnStream{} = stream} =
-             Thread.run(
+             start_stream(
                thread,
                [%{"type" => "text", "text" => "Reply with the single word OK."}],
                %{}
@@ -231,7 +231,7 @@ defmodule CodexEx.AppServer.TurnStreamTest do
     MockTransport.configure(mock, delay_ms: 300, partial_turn_notifications: true)
 
     assert {:ok, %TurnStream{} = stream} =
-             Thread.run(
+             start_stream(
                thread,
                [%{"type" => "text", "text" => "Reply with the single word OK."}],
                %{}
@@ -426,6 +426,14 @@ defmodule CodexEx.AppServer.TurnStreamTest do
 
     assert_receive {:DOWN, ^stream_ref, :process, _pid, :normal}
     refute Map.has_key?(:sys.get_state(client).subscribers, stream.pid)
+  end
+
+  defp start_stream(%Thread{client: client, id: thread_id}, input, opts \\ %{}) do
+    TurnStream.start_request(
+      client,
+      thread_id,
+      fn -> Client.start_turn(client, thread_id, input, opts) end
+    )
   end
 
   defp assert_turn_items_include_prompt_and_reply(items, prompt, reply) when is_list(items) do

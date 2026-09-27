@@ -6,10 +6,10 @@ defmodule CodexAppServerBindingSmoke do
   alias CodexEx.AppServer.Protocol.Generated.Shared.ServerRequest
   alias CodexEx.AppServer.Protocol.Generated.Shared.ToolRequestUserInputResponse
   alias CodexEx.AppServer.Protocol.Generated.Shared.ToolRequestUserInputResponse.ToolRequestUserInputAnswer
-  alias CodexEx.AppServer.Protocol.Generated.V1.InitializeResponse
   alias CodexEx.AppServer.Thread
   alias CodexEx.AppServer.ThreadItem
   alias CodexEx.AppServer.Turn
+  alias CodexEx.AppServer.TurnStream
 
   @default_timeout 30_000
   @default_prompt "Reply with the single word OK."
@@ -34,7 +34,7 @@ defmodule CodexAppServerBindingSmoke do
         try do
           run_connected(client, ctx)
         after
-          _ = Client.disconnect(client)
+          if Process.alive?(client), do: GenServer.stop(client)
         end
 
       {:error, reason} ->
@@ -58,9 +58,7 @@ defmodule CodexAppServerBindingSmoke do
   end
 
   defp run_connected(client, ctx) do
-    with {:ok, initialize_result} <- fetch_initialize_result(client, ctx.report),
-         :ok <- subscribe(client, ctx.report),
-         :ok <- maybe_register_request_handler(client, ctx.fixture_mode?, ctx.report),
+    with :ok <- subscribe(client, ctx.report),
          {:ok, %Thread{id: thread_id} = thread} <-
            start_thread(client, ctx.thread_params, ctx.report),
          {:ok, thread_started, pre_thread_messages} <-
@@ -68,7 +66,7 @@ defmodule CodexAppServerBindingSmoke do
          {:ok, turn_started, run_result, pre_turn_messages} <-
            start_turn(thread, ctx.prompt, ctx.turn_opts, ctx.timeout, ctx.report),
          {:ok, turn_completed, pre_completed_messages} <-
-           await_turn_completed(thread_id, turn_started, ctx.timeout, ctx.report),
+           await_turn_completed(client, thread_id, turn_started, ctx.timeout, ctx.report),
          {:ok, assistant_text_from_run} <- await_run_text(run_result, ctx.timeout, ctx.report),
          {:ok, refreshed_turn_count, assistant_text} <-
            refresh_thread(thread, Message.turn_id(turn_started), ctx.report),
@@ -86,7 +84,6 @@ defmodule CodexAppServerBindingSmoke do
            ) do
       success_report(ctx, %{
         assistant_text: assistant_text || assistant_text_from_run,
-        initialize_result: initialize_result,
         pre_completed_messages: pre_completed_messages,
         pre_thread_messages: pre_thread_messages,
         pre_turn_messages: pre_turn_messages,
@@ -119,11 +116,13 @@ defmodule CodexAppServerBindingSmoke do
     )
   end
 
-  defp await_turn_completed(thread_id, turn_started, timeout, report) do
+  defp await_turn_completed(client, thread_id, turn_started, timeout, report) do
     turn_id = Message.turn_id(turn_started)
 
     await_message(
       fn message ->
+        :ok = maybe_reply_request(client, message)
+
         if Message.method_name(message) == "turn/completed" and
              Message.thread_id(message) == thread_id and
              Message.turn_id(message) == turn_id do
@@ -140,7 +139,6 @@ defmodule CodexAppServerBindingSmoke do
 
   defp success_report(ctx, %{
          assistant_text: assistant_text,
-         initialize_result: initialize_result,
          pre_completed_messages: pre_completed_messages,
          pre_thread_messages: pre_thread_messages,
          pre_turn_messages: pre_turn_messages,
@@ -168,7 +166,6 @@ defmodule CodexAppServerBindingSmoke do
 
     {:ok,
      %{
-       initialize_result: initialize_result_report(initialize_result),
        thread_id: thread_id,
        turn_id: Message.turn_id(turn_started),
        turn_status: final_turn && final_turn.status,
@@ -182,7 +179,6 @@ defmodule CodexAppServerBindingSmoke do
        logs:
          build_logs(%{
            fixture_mode?: ctx.fixture_mode?,
-           initialize_result: initialize_result,
            prompt: ctx.prompt,
            refreshed_turn_count: refreshed_turn_count,
            request_method: request_method,
@@ -199,40 +195,10 @@ defmodule CodexAppServerBindingSmoke do
      }}
   end
 
-  defp initialize_result_report(%InitializeResponse{} = result) do
-    %{
-      codex_home: result.codex_home,
-      platform_family: result.platform_family,
-      platform_os: result.platform_os,
-      user_agent: result.user_agent
-    }
-  end
-
-  defp fetch_initialize_result(client, report) do
-    case Client.initialize_result(client) do
-      {:ok, %InitializeResponse{} = result} -> {:ok, result}
-      {:error, reason} -> failure(:initialize_result, reason, report)
-    end
-  end
-
   defp subscribe(client, report) do
     case Client.subscribe(client) do
       :ok -> :ok
       {:error, reason} -> failure(:subscribe, reason, report)
-    end
-  end
-
-  defp maybe_register_request_handler(_client, false, _report), do: :ok
-
-  defp maybe_register_request_handler(client, true, report) do
-    case Client.register_request_handler(client, fn _request ->
-           {:ok,
-            %ToolRequestUserInputResponse{
-              answers: %{"approve" => %ToolRequestUserInputAnswer{answers: ["yes"]}}
-            }}
-         end) do
-      :ok -> :ok
-      {:error, reason} -> failure(:register_request_handler, reason, report)
     end
   end
 
@@ -244,18 +210,20 @@ defmodule CodexAppServerBindingSmoke do
   end
 
   defp start_turn(thread, prompt, turn_opts, timeout, report) do
-    task = Task.async(fn -> Thread.run_text(thread, prompt, turn_opts) end)
-    await_turn_started_or_result(task, thread.id, timeout, report, [])
+    task = Task.async(fn -> run_text(thread, prompt, turn_opts, timeout) end)
+    await_turn_started_or_result(task, thread.client, thread.id, timeout, report, [])
   end
 
-  defp await_turn_started_or_result(task, thread_id, timeout, report, skipped_messages) do
+  defp await_turn_started_or_result(task, client, thread_id, timeout, report, skipped_messages) do
     receive do
       {:codex_app_server_event, message} ->
+        :ok = maybe_reply_request(client, message)
+
         if Message.method_name(message) == "turn/started" and
              Message.thread_id(message) == thread_id do
           {:ok, message, task, Enum.reverse(skipped_messages)}
         else
-          await_turn_started_or_result(task, thread_id, timeout, report, [
+          await_turn_started_or_result(task, client, thread_id, timeout, report, [
             message | skipped_messages
           ])
         end
@@ -317,6 +285,39 @@ defmodule CodexAppServerBindingSmoke do
     end
   end
 
+  defp run_text(%Thread{client: client, id: thread_id}, text, opts, timeout) do
+    with {:ok, stream} <-
+           TurnStream.start_request(
+             client,
+             thread_id,
+             fn ->
+               Client.start_turn(
+                 client,
+                 thread_id,
+                 [%{"type" => "text", "text" => text}],
+                 opts
+               )
+             end
+           ),
+         {:ok, stream} <- TurnStream.wait(stream, timeout),
+         :ok <- TurnStream.ensure_success(stream) do
+      {:ok, stream.final_text}
+    end
+  end
+
+  defp maybe_reply_request(client, %ServerRequest{id: request_id}) when not is_nil(request_id) do
+    Client.reply_request(
+      client,
+      request_id,
+      {:ok,
+       %ToolRequestUserInputResponse{
+         answers: %{"approve" => %ToolRequestUserInputAnswer{answers: ["yes"]}}
+       }}
+    )
+  end
+
+  defp maybe_reply_request(_client, _message), do: :ok
+
   defp refresh_thread(thread, turn_id, report) when is_binary(turn_id) do
     case Thread.refresh(thread, include_turns: true) do
       {:ok, %Thread{snapshot: snapshot}} ->
@@ -371,7 +372,6 @@ defmodule CodexAppServerBindingSmoke do
 
   defp base_report(fixture_mode?) do
     %{
-      initialize_result: nil,
       thread_id: nil,
       turn_id: nil,
       turn_status: nil,
@@ -390,7 +390,6 @@ defmodule CodexAppServerBindingSmoke do
 
   defp build_logs(%{
          fixture_mode?: fixture_mode?,
-         initialize_result: initialize_result,
          prompt: prompt,
          refreshed_turn_count: refreshed_turn_count,
          assistant_text: assistant_text,
@@ -403,13 +402,6 @@ defmodule CodexAppServerBindingSmoke do
        }) do
     [
       %{direction: "input", fixture_mode?: fixture_mode?, type: "initialize"},
-      %{
-        direction: "output",
-        type: "initialize",
-        platform_family: initialize_result.platform_family,
-        platform_os: initialize_result.platform_os,
-        user_agent: initialize_result.user_agent
-      },
       %{direction: "input", cwd: thread_params["cwd"], type: "thread/start"},
       %{
         direction: "input",

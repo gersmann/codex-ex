@@ -57,18 +57,14 @@ defmodule CodexEx.AppServer.Session do
       when is_binary(method) and (is_map(params) or is_list(params)) and (is_integer(timeout) or timeout == :infinity) do
     timeout = bounded_request_timeout(timeout)
 
-    server
-    |> GenServer.call({:request, method, params, timeout}, call_timeout(timeout))
-    |> normalize_request_response()
+    GenServer.call(server, {:request, method, params, timeout}, call_timeout(timeout))
   catch
     :exit, reason -> {:error, {:session_call_failed, reason}}
   end
 
   @spec notify(t(), binary(), map() | list()) :: :ok | {:error, term()}
   def notify(server, method, params \\ %{}) when is_binary(method) and (is_map(params) or is_list(params)) do
-    server
-    |> GenServer.call({:notify, method, params})
-    |> normalize_notify_response()
+    GenServer.call(server, {:notify, method, params})
   end
 
   @spec respond(
@@ -83,18 +79,14 @@ defmodule CodexEx.AppServer.Session do
     with {:ok, encoded_result} <- Message.encode_reply_payload(result) do
       payload = %{"jsonrpc" => @jsonrpc_version, "id" => id, "result" => encoded_result}
 
-      server
-      |> GenServer.call({:respond, payload}, timeout)
-      |> normalize_notify_response()
+      GenServer.call(server, {:respond, payload}, timeout)
     end
   end
 
   def respond(server, id, {:error, error}, timeout) when is_integer(timeout) or timeout == :infinity do
     payload = %{"jsonrpc" => @jsonrpc_version, "id" => id, "error" => error}
 
-    server
-    |> GenServer.call({:respond, payload}, timeout)
-    |> normalize_notify_response()
+    GenServer.call(server, {:respond, payload}, timeout)
   end
 
   @spec initialize(t(), map() | list(), request_timeout()) :: {:ok, term()} | {:error, term()}
@@ -129,9 +121,7 @@ defmodule CodexEx.AppServer.Session do
   @doc "Acknowledges that persisted history has reconciled a daemon replay gap."
   @spec acknowledge_replay_gap(t(), non_neg_integer()) :: :ok | {:error, term()}
   def acknowledge_replay_gap(server, through_sequence) when is_integer(through_sequence) and through_sequence >= 0 do
-    server
-    |> GenServer.call({:acknowledge_replay_gap, through_sequence}, @default_timeout)
-    |> normalize_notify_response()
+    GenServer.call(server, {:acknowledge_replay_gap, through_sequence}, @default_timeout)
   catch
     :exit, reason -> {:error, {:session_call_failed, reason}}
   end
@@ -139,9 +129,7 @@ defmodule CodexEx.AppServer.Session do
   @doc "Acknowledges ordered downstream handling through the given transport sequence."
   @spec acknowledge_transport_sequence(t(), non_neg_integer()) :: :ok | {:error, term()}
   def acknowledge_transport_sequence(server, sequence) when is_integer(sequence) and sequence >= 0 do
-    server
-    |> GenServer.call({:acknowledge_transport_sequence, sequence}, @default_timeout)
-    |> normalize_notify_response()
+    GenServer.call(server, {:acknowledge_transport_sequence, sequence}, @default_timeout)
   catch
     :exit, reason -> {:error, {:session_call_failed, reason}}
   end
@@ -674,26 +662,6 @@ defmodule CodexEx.AppServer.Session do
   end
 
   defp send_notification_target(_target, _message), do: :ok
-
-  defp normalize_request_response({:ok, _result} = result), do: result
-  defp normalize_request_response({:error, {:remote_error, _error}} = error), do: error
-  defp normalize_request_response({:error, {:encode_failed, _reason}} = error), do: error
-  defp normalize_request_response({:error, {:send_failed, :closed}} = error), do: error
-  defp normalize_request_response({:error, :request_timeout} = error), do: error
-  defp normalize_request_response({:error, :session_closed} = error), do: error
-  defp normalize_request_response({:error, {:protocol_error, _reason}} = error), do: error
-  defp normalize_request_response({:error, {:transport_closed, _exit_status}} = error), do: error
-
-  defp normalize_request_response(other), do: {:error, {:protocol_error, {:unexpected_reply, other}}}
-
-  defp normalize_notify_response(:ok), do: :ok
-  defp normalize_notify_response({:error, {:encode_failed, _reason}} = error), do: error
-  defp normalize_notify_response({:error, {:send_failed, :closed}} = error), do: error
-  defp normalize_notify_response({:error, :session_closed} = error), do: error
-  defp normalize_notify_response({:error, {:protocol_error, _reason}} = error), do: error
-  defp normalize_notify_response({:error, {:transport_closed, _exit_status}} = error), do: error
-
-  defp normalize_notify_response(other), do: {:error, {:protocol_error, {:unexpected_reply, other}}}
 
   defp transport_module(:stdio), do: StdioTransport
   defp transport_module(:websocket), do: WebSocketTransport

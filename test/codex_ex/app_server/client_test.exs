@@ -9,9 +9,7 @@ defmodule CodexEx.AppServer.ClientTest do
   alias CodexEx.AppServer.Protocol.Generated.Shared.McpServerElicitationRequestResponse
   alias CodexEx.AppServer.Protocol.Generated.Shared.ServerNotification
   alias CodexEx.AppServer.Protocol.Generated.Shared.ServerRequest
-  alias CodexEx.AppServer.Protocol.Generated.Shared.ToolRequestUserInputParams
   alias CodexEx.AppServer.Protocol.Generated.Shared.ToolRequestUserInputResponse
-  alias CodexEx.AppServer.Protocol.Generated.V1.InitializeResponse
   alias CodexEx.AppServer.Protocol.Generated.V2.ConfigReadResponse
   alias CodexEx.AppServer.Protocol.Generated.V2.ConfigWriteResponse
   alias CodexEx.AppServer.Protocol.Generated.V2.HooksListResponse
@@ -38,12 +36,7 @@ defmodule CodexEx.AppServer.ClientTest do
   test "connect initializes the app-server session", %{mock: mock} do
     client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
 
-    assert {:ok,
-            %InitializeResponse{
-              platform_family: "unix",
-              platform_os: "linux",
-              user_agent: "mock-codex-app-server/1.0"
-            }} = Client.initialize_result(client)
+    assert Process.alive?(client)
   end
 
   test "MCP resource and tool calls preserve server and thread scope", %{mock: mock} do
@@ -89,33 +82,8 @@ defmodule CodexEx.AppServer.ClientTest do
                     }}
   end
 
-  test "registers an initial subscriber before startup events are handled", %{mock: mock} do
-    client =
-      start_supervised!({Client, [transport: MockTransport, mock_pid: mock, subscriber: self()]})
-
-    assert Map.has_key?(:sys.get_state(client).subscribers, self())
-
-    assert_receive {:codex_app_server_event,
-                    %GenericNotification{
-                      method: "session/initialized"
-                    }}
-  end
-
-  test "disconnect stops the owned session", %{mock: mock} do
-    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
-    session = :sys.get_state(client).session
-    session_ref = Process.monitor(session)
-
-    assert :ok = Client.disconnect(client)
-    assert_receive {:DOWN, ^session_ref, :process, ^session, :normal}
-  end
-
   test "sequenced notifications are routed without exposing transport sequence", %{mock: mock} do
-    client =
-      start_supervised!({Client, [transport: MockTransport, mock_pid: mock, subscriber: self()]})
-
-    assert_receive {:codex_app_server_event, %GenericNotification{method: "session/initialized"}}
-
+    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
     assert :ok = Client.subscribe(client, self(), thread_id: "thread-1")
     session = :sys.get_state(client).session
 
@@ -330,11 +298,7 @@ defmodule CodexEx.AppServer.ClientTest do
   test "thread-scoped subscribers ignore detached threads without blocking later events", %{
     mock: mock
   } do
-    client =
-      start_supervised!({Client, [transport: MockTransport, mock_pid: mock, subscriber: self()]})
-
-    assert_receive {:codex_app_server_event, %GenericNotification{method: "session/initialized"}}
-
+    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
     assert :ok = Client.subscribe(client, self(), thread_id: "thread-current")
     session = :sys.get_state(client).session
 
@@ -359,11 +323,7 @@ defmodule CodexEx.AppServer.ClientTest do
   end
 
   test "nil thread scope receives global events without observing other threads", %{mock: mock} do
-    client =
-      start_supervised!({Client, [transport: MockTransport, mock_pid: mock, subscriber: self()]})
-
-    assert_receive {:codex_app_server_event, %GenericNotification{method: "session/initialized"}}
-
+    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
     assert :ok = Client.subscribe(client, self(), thread_id: nil)
     session = :sys.get_state(client).session
 
@@ -526,8 +486,7 @@ defmodule CodexEx.AppServer.ClientTest do
   end
 
   test "terminal transport sequence is acknowledged immediately", %{mock: mock} do
-    client =
-      start_supervised!({Client, [transport: MockTransport, mock_pid: mock, subscriber: self()]})
+    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
 
     session = :sys.get_state(client).session
     close_reason = {:remote_session_closed, "exited"}
@@ -542,8 +501,8 @@ defmodule CodexEx.AppServer.ClientTest do
   end
 
   test "replying removes a pending request from subscriber replay", %{mock: mock} do
-    client =
-      start_supervised!({Client, [transport: MockTransport, mock_pid: mock, subscriber: self()]})
+    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
+    assert :ok = Client.subscribe(client)
 
     session = :sys.get_state(client).session
     :sys.replace_state(session, &%{&1 | last_transport_sequence: 1})
@@ -587,12 +546,7 @@ defmodule CodexEx.AppServer.ClientTest do
     client =
       start_supervised!({Client, [transport: :websocket, url: "ws://127.0.0.1:#{port}/ws"]})
 
-    assert {:ok,
-            %InitializeResponse{
-              platform_family: "unix",
-              platform_os: "linux",
-              user_agent: "mock-codex-app-server-websocket/1.0"
-            }} = Client.initialize_result(client)
+    assert Process.alive?(client)
   end
 
   test "start_thread returns a typed thread wrapper and emits typed notifications", %{
@@ -653,15 +607,15 @@ defmodule CodexEx.AppServer.ClientTest do
     assert snapshot.id == thread_id
 
     assert {:ok, %Thread{id: forked_id, snapshot: %ThreadSnapshot{id: forked_snapshot_id}}} =
-             Thread.fork(thread, %{"ephemeral" => true})
+             Client.fork_thread(client, thread.id, %{"ephemeral" => true})
 
     assert forked_snapshot_id == forked_id
     assert forked_id != thread_id
 
-    assert :ok = Thread.archive(thread)
+    assert :ok = Client.archive_thread(client, thread.id)
 
     assert {:ok, %Thread{id: ^thread_id, snapshot: %ThreadSnapshot{id: ^thread_id}}} =
-             Thread.unarchive(thread)
+             Client.unarchive_thread(client, thread.id)
   end
 
   test "side fork overrides replay a legacy workspace sandbox exactly", %{mock: mock} do
@@ -833,7 +787,9 @@ defmodule CodexEx.AppServer.ClientTest do
     stale_thread = %{thread | snapshot: %{thread.snapshot | history_mode: "paginated"}}
     MockTransport.configure(mock, notify: self())
 
-    assert {:error, {:unsupported_thread_history_mode, "legacy"}} = Thread.fork(stale_thread)
+    assert {:error, {:unsupported_thread_history_mode, "legacy"}} =
+             Client.fork_thread(client, stale_thread.id)
+
     refute_receive {:mock_thread_fork, _params}, 0
     assert :sys.get_state(mock).thread_counter == 1
   end
@@ -842,12 +798,12 @@ defmodule CodexEx.AppServer.ClientTest do
     client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
 
     assert {:ok, %Thread{} = thread} = Client.start_thread(client)
-    assert {:ok, "OK"} = Thread.run_text(thread, "Reply")
-    assert {:ok, "OK"} = Thread.run_text(thread, "Reply again")
+    assert {:ok, "OK"} = run_text(thread, "Reply")
+    assert {:ok, "OK"} = run_text(thread, "Reply again")
     MockTransport.configure(mock, notify: self())
 
     assert {:ok, %Thread{snapshot: %ThreadSnapshot{turns: []}} = forked_thread} =
-             Thread.fork(thread, %{
+             Client.fork_thread(client, thread.id, %{
                "beforeTurnId" => "turn-2",
                "ephemeral" => true,
                "excludeTurns" => false
@@ -908,8 +864,8 @@ defmodule CodexEx.AppServer.ClientTest do
     client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
 
     assert {:ok, %Thread{id: thread_id}} = Client.start_thread(client)
-    assert {:ok, "OK"} = Client.run_text(client, thread_id, "Reply")
-    assert {:ok, "OK"} = Client.run_text(client, thread_id, "Reply again")
+    assert {:ok, "OK"} = run_text(client, thread_id, "Reply")
+    assert {:ok, "OK"} = run_text(client, thread_id, "Reply again")
     MockTransport.configure(mock, notify: self())
 
     assert {:ok, %Thread{id: ^thread_id, snapshot: %ThreadSnapshot{turns: []}} = reverted} =
@@ -921,46 +877,11 @@ defmodule CodexEx.AppServer.ClientTest do
              Thread.refresh(reverted, include_turns: true)
   end
 
-  test "legacy rollback fails before mutating remote history", %{mock: mock} do
-    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
-
-    assert {:ok, %Thread{id: thread_id} = thread} =
-             Client.start_thread(client, %{"historyMode" => "legacy"})
-
-    assert {:ok, "OK"} = Thread.run_text(thread, "Reply")
-
-    assert {:error, {:unsupported_thread_history_mode, "legacy"}} =
-             Client.rollback_thread(client, thread_id, 1)
-
-    state = :sys.get_state(mock)
-
-    assert [%{"id" => "turn-1"}] =
-             Enum.map(state.threads[thread_id]["turns"], &Map.take(&1, ["id"]))
-  end
-
-  test "paginated rollback is rejected without mutating remote history", %{mock: mock} do
-    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
-
-    assert {:ok, %Thread{id: thread_id} = thread} = Client.start_thread(client)
-    assert {:ok, "OK"} = Thread.run_text(thread, "Reply")
-
-    assert {:error,
-            {:remote_error,
-             %{
-               "code" => -32_600,
-               "message" => "paginated threads do not support thread/rollback"
-             }}} =
-             Client.rollback_thread(client, thread_id, 1)
-
-    assert [%{"id" => "turn-1"}] =
-             Enum.map(:sys.get_state(mock).threads[thread_id]["turns"], &Map.take(&1, ["id"]))
-  end
-
   test "authoritative pagination rejects a repeated cursor without a third request", %{mock: mock} do
     client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
 
     assert {:ok, %Thread{} = thread} = Client.start_thread(client)
-    assert {:ok, "OK"} = Thread.run_text(thread, "Reply")
+    assert {:ok, "OK"} = run_text(thread, "Reply")
     MockTransport.configure(mock, notify: self(), thread_turns_cursor_mode: :repeat)
 
     assert {:error, {:protocol_error, {:repeated_thread_turns_cursor, "same"}}} =
@@ -977,7 +898,7 @@ defmodule CodexEx.AppServer.ClientTest do
     client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
 
     assert {:ok, %Thread{} = thread} = Client.start_thread(client)
-    assert {:ok, "OK"} = Thread.run_text(thread, "Reply")
+    assert {:ok, "OK"} = run_text(thread, "Reply")
     MockTransport.configure(mock, notify: self(), thread_turns_cursor_mode: :empty_with_cursor)
 
     assert {:error, {:protocol_error, :empty_thread_turns_page_with_cursor}} =
@@ -1023,8 +944,8 @@ defmodule CodexEx.AppServer.ClientTest do
     MockTransport.configure(mock, thread_turns_page_size: 1)
 
     assert {:ok, %Thread{} = thread} = Client.start_thread(client)
-    assert {:ok, _response} = Thread.run_text(thread, "First")
-    assert {:ok, _response} = Thread.run_text(thread, "Second")
+    assert {:ok, _response} = run_text(thread, "First")
+    assert {:ok, _response} = run_text(thread, "Second")
 
     assert {:ok, %Thread{snapshot: %ThreadSnapshot{turns: turns}}} =
              Thread.refresh(thread, include_turns: true)
@@ -1048,8 +969,8 @@ defmodule CodexEx.AppServer.ClientTest do
     client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
 
     assert {:ok, %Thread{id: thread_id} = thread} = Client.start_thread(client)
-    assert {:ok, _response} = Thread.run_text(thread, "First")
-    assert {:ok, _response} = Thread.run_text(thread, "Second")
+    assert {:ok, _response} = run_text(thread, "First")
+    assert {:ok, _response} = run_text(thread, "Second")
 
     assert {:ok, %{turns: [%Turn{id: "turn-2"}], next_cursor: "1"}} =
              Client.list_thread_turns(client, thread_id, limit: 1)
@@ -1067,7 +988,7 @@ defmodule CodexEx.AppServer.ClientTest do
               status: :active,
               token_budget: 1200
             }} =
-             Thread.set_goal(thread, %{
+             Client.set_thread_goal(client, thread.id, %{
                "objective" => "Keep the goal focused",
                "status" => "active",
                "tokenBudget" => 1200
@@ -1078,14 +999,14 @@ defmodule CodexEx.AppServer.ClientTest do
     assert Message.thread_id(updated) == thread_id
 
     assert {:ok, %ThreadGoal{thread_id: ^thread_id, objective: "Keep the goal focused"}} =
-             Thread.get_goal(thread)
+             Client.get_thread_goal(client, thread.id)
 
-    assert :ok = Thread.clear_goal(thread)
+    assert :ok = Client.clear_thread_goal(client, thread.id)
 
     assert_receive {:codex_app_server_event, %ServerNotification{method: "thread/goal/cleared"} = cleared}
 
     assert Message.thread_id(cleared) == thread_id
-    assert {:ok, nil} = Thread.get_goal(thread)
+    assert {:ok, nil} = Client.get_thread_goal(client, thread.id)
   end
 
   test "experimental feature helpers use generated protocol", %{mock: mock} do
@@ -1168,7 +1089,7 @@ defmodule CodexEx.AppServer.ClientTest do
     assert :ok = Client.stop_fuzzy_file_search_session(client, "search-1")
   end
 
-  test "run returns a typed turn stream and publishes typed notifications", %{
+  test "turn streams publish typed notifications", %{
     mock: mock
   } do
     client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
@@ -1178,7 +1099,7 @@ defmodule CodexEx.AppServer.ClientTest do
     MockTransport.configure(mock, delay_ms: 200)
 
     assert {:ok, %TurnStream{} = stream} =
-             Thread.run(
+             start_stream(
                thread,
                [%{"type" => "text", "text" => "Reply with the single word OK."}],
                %{"clientUserMessageId" => "client-run-1"}
@@ -1238,35 +1159,14 @@ defmodule CodexEx.AppServer.ClientTest do
     assert Map.keys(:sys.get_state(client).subscribers) == [self()]
   end
 
-  test "run_text returns final assistant text for completed turns", %{
-    mock: mock
-  } do
-    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
-    assert {:ok, %Thread{} = thread} = Client.start_thread(client)
-
-    assert {:ok, "OK"} = Thread.run_text(thread, "Reply with the single word OK.")
-  end
-
-  test "run_text survives turns longer than the default GenServer.call timeout", %{
-    mock: mock
-  } do
-    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
-    assert {:ok, %Thread{} = thread} = Client.start_thread(client)
-
-    MockTransport.configure(mock, delay_ms: 5_200)
-
-    assert {:ok, "OK"} =
-             Thread.run_text(thread, "Reply with the single word OK.", %{})
-  end
-
-  test "run supports collaborationMode when the client advertises experimentalApi", %{
+  test "turns support collaborationMode when the client advertises experimentalApi", %{
     mock: mock
   } do
     client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
     assert {:ok, %Thread{} = thread} = Client.start_thread(client)
 
     assert {:ok, "OK"} =
-             Thread.run_text(thread, "Reply with the single word OK.", %{
+             run_text(thread, "Reply with the single word OK.", %{
                "collaborationMode" => %{
                  "mode" => "plan",
                  "settings" => %{"model" => "gpt-5.4"}
@@ -1274,14 +1174,14 @@ defmodule CodexEx.AppServer.ClientTest do
              })
   end
 
-  test "run can reset a sticky collaborationMode back to default explicitly", %{
+  test "turns can reset a sticky collaborationMode back to default explicitly", %{
     mock: mock
   } do
     client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
     assert {:ok, %Thread{} = thread} = Client.start_thread(client)
 
     assert {:ok, "plan"} =
-             Thread.run_text(thread, "Reply with the current collaboration mode.", %{
+             run_text(thread, "Reply with the current collaboration mode.", %{
                "collaborationMode" => %{
                  "mode" => "plan",
                  "settings" => %{"model" => "gpt-5.4"}
@@ -1289,7 +1189,7 @@ defmodule CodexEx.AppServer.ClientTest do
              })
 
     assert {:ok, "default"} =
-             Thread.run_text(thread, "Reply with the current collaboration mode.", %{
+             run_text(thread, "Reply with the current collaboration mode.", %{
                "collaborationMode" => %{
                  "mode" => "default",
                  "settings" => %{"model" => "gpt-5.4"}
@@ -1297,7 +1197,7 @@ defmodule CodexEx.AppServer.ClientTest do
              })
   end
 
-  test "run returns a protocol error when the server sends an unexpected result shape", %{
+  test "turn streams return a protocol error when the server sends an unexpected result shape", %{
     mock: mock
   } do
     client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
@@ -1306,7 +1206,7 @@ defmodule CodexEx.AppServer.ClientTest do
     MockTransport.configure(mock, malformed_result: true)
 
     assert {:ok, %TurnStream{} = stream} =
-             Thread.run(thread, [%{"type" => "text", "text" => "Break the shape"}], %{})
+             start_stream(thread, [%{"type" => "text", "text" => "Break the shape"}], %{})
 
     assert {:error, {:protocol_error, {:unexpected_turn_result, %{"unexpected" => true}}}} =
              TurnStream.wait(stream, 5_000)
@@ -1317,29 +1217,8 @@ defmodule CodexEx.AppServer.ClientTest do
 
     _client = start_supervised!({Client, [name: name, transport: MockTransport, mock_pid: mock]})
 
-    assert {:ok, %InitializeResponse{user_agent: "mock-codex-app-server/1.0"}} =
-             Client.initialize_result(name)
-
     assert {:ok, %Thread{id: thread_id}} = Client.start_thread(name)
     assert {:ok, %ThreadSnapshot{id: ^thread_id}} = Client.read_thread(name, thread_id)
-  end
-
-  test "run_json parses the final assistant message as JSON", %{
-    mock: mock
-  } do
-    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
-    assert {:ok, %Thread{id: thread_id}} = Client.start_thread(client)
-
-    schema = %{
-      "type" => "object",
-      "properties" => %{
-        "summary" => %{"type" => "string"}
-      },
-      "required" => ["summary"]
-    }
-
-    assert {:ok, %{"summary" => "OK"}} =
-             Client.run_json(client, thread_id, "Return JSON", schema)
   end
 
   test "reply_request answers server-initiated requests during a turn", %{
@@ -1353,7 +1232,7 @@ defmodule CodexEx.AppServer.ClientTest do
 
     task =
       Task.async(fn ->
-        Thread.run_text(thread, "Need approval", %{})
+        run_text(thread, "Need approval", %{})
       end)
 
     assert_receive {:codex_app_server_event,
@@ -1390,7 +1269,7 @@ defmodule CodexEx.AppServer.ClientTest do
 
     task =
       Task.async(fn ->
-        Thread.run_text(thread, "Need approval", %{})
+        run_text(thread, "Need approval", %{})
       end)
 
     assert_receive {:codex_app_server_event,
@@ -1436,54 +1315,6 @@ defmodule CodexEx.AppServer.ClientTest do
     assert {:ok, "OK"} = Task.await(task)
   end
 
-  test "registered request handlers auto-reply to typed server requests", %{
-    mock: mock
-  } do
-    test_pid = self()
-    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
-    assert {:ok, %Thread{id: thread_id} = thread} = Client.start_thread(client)
-    assert :ok = Client.subscribe(client)
-
-    assert :ok =
-             Client.register_request_handler(client, fn request ->
-               send(test_pid, {:request_handled, request})
-
-               {:ok,
-                %ToolRequestUserInputResponse{
-                  answers: %{
-                    "approve" => %ToolRequestUserInputResponse.ToolRequestUserInputAnswer{
-                      answers: ["yes"]
-                    }
-                  }
-                }}
-             end)
-
-    MockTransport.configure(mock, server_request: true)
-
-    assert {:ok, "OK"} =
-             Thread.run_text(thread, "Need approval", %{})
-
-    assert_receive {:request_handled,
-                    %ServerRequest{
-                      method: "item/tool/requestUserInput",
-                      id: "server-request-1",
-                      params: %ToolRequestUserInputParams{
-                        item_id: "item-1",
-                        thread_id: ^thread_id,
-                        turn_id: _turn_id,
-                        questions: [
-                          %ToolRequestUserInputParams.ToolRequestUserInputQuestion{
-                            header: "Approve",
-                            id: "approve",
-                            question: "Continue?"
-                          }
-                        ]
-                      }
-                    }}
-
-    assert {:ok, []} = Client.pending_requests(client)
-  end
-
   test "reply_request rejects malformed raw request_user_input payloads", %{
     mock: mock
   } do
@@ -1495,7 +1326,7 @@ defmodule CodexEx.AppServer.ClientTest do
 
     task =
       Task.async(fn ->
-        Thread.run_text(thread, "Need approval", %{})
+        run_text(thread, "Need approval", %{})
       end)
 
     assert_receive {:codex_app_server_event,
@@ -1526,7 +1357,7 @@ defmodule CodexEx.AppServer.ClientTest do
 
     task =
       Task.async(fn ->
-        Thread.run_text(thread, "elicit me", %{})
+        run_text(thread, "elicit me", %{})
       end)
 
     assert_receive {:codex_app_server_event,
@@ -1547,6 +1378,29 @@ defmodule CodexEx.AppServer.ClientTest do
              )
 
     assert {:ok, "OK"} = Task.await(task)
+  end
+
+  defp start_stream(%Thread{client: client, id: thread_id}, input, opts) do
+    TurnStream.start_request(
+      client,
+      thread_id,
+      fn -> Client.start_turn(client, thread_id, input, opts) end
+    )
+  end
+
+  defp run_text(%Thread{client: client, id: thread_id}, text), do: run_text(client, thread_id, text, %{})
+
+  defp run_text(%Thread{client: client, id: thread_id}, text, opts), do: run_text(client, thread_id, text, opts)
+
+  defp run_text(client, thread_id, text), do: run_text(client, thread_id, text, %{})
+
+  defp run_text(client, thread_id, text, opts) do
+    with {:ok, stream} <-
+           start_stream(%Thread{client: client, id: thread_id}, [%{"type" => "text", "text" => text}], opts),
+         {:ok, stream} <- TurnStream.wait(stream, 5_000),
+         :ok <- TurnStream.ensure_success(stream) do
+      {:ok, stream.final_text}
+    end
   end
 
   defp protocol_subscriber(parent) do

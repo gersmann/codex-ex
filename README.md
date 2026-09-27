@@ -9,7 +9,7 @@ pooling, and a fully code-generated protocol binding.
 ```elixir
 def deps do
   [
-    {:codex_ex, "~> 0.2.0"}
+    {:codex_ex, "~> 0.3.0"}
   ]
 end
 ```
@@ -22,39 +22,52 @@ Requires a `codex` executable on `$PATH` for the default stdio transport
 Get a pooled client and run a turn to completion:
 
 ```elixir
-alias CodexEx.AppServer.{Client, ClientManager, Thread}
+alias CodexEx.AppServer.{Client, ClientManager, TurnStream}
 
 # Pooled: callers with the same connection options share one client
 # (and one underlying `codex app-server` OS process).
 {:ok, client} = ClientManager.get_client(transport: :stdio)
 
-# Start a thread and run a prompt, returning the final assistant text.
+# Start a thread and run a prompt to completion.
 {:ok, thread} = Client.start_thread(client, %{"cwd" => "/path/to/workspace"})
-{:ok, answer} = Thread.run_text(thread, "Summarize the TODOs in this repo.")
-```
+input = [%{"type" => "text", "text" => "Summarize the TODOs in this repo."}]
 
-`Thread.run/3` starts the turn and returns a live `TurnStream`; wait on it to
-get the collected result — items, text deltas, token usage, and the final turn:
+{:ok, stream} =
+  TurnStream.start_request(client, thread.id, fn ->
+    Client.start_turn(client, thread.id, input)
+  end)
 
-```elixir
-alias CodexEx.AppServer.TurnStream
-
-{:ok, stream} = Thread.run(thread, [%{"type" => "text", "text" => "Refactor foo/1"}])
 {:ok, stream} = TurnStream.wait(stream)
+:ok = TurnStream.ensure_success(stream)
 stream.final_text
 stream.items
 stream.usage
 ```
 
-For structured output, pass a JSON schema:
+For structured output, pass an `outputSchema` turn option and decode the final
+stream value:
 
 ```elixir
-{:ok, %{"languages" => _}} =
-  Thread.run_json(thread, "List the languages used in this repo.", %{
+schema =
+  %{
     "type" => "object",
     "properties" => %{"languages" => %{"type" => "array", "items" => %{"type" => "string"}}},
     "required" => ["languages"]
-  })
+  }
+
+{:ok, stream} =
+  TurnStream.start_request(client, thread.id, fn ->
+    Client.start_turn(
+      client,
+      thread.id,
+      [%{"type" => "text", "text" => "List the languages used in this repo."}],
+      %{"outputSchema" => schema}
+    )
+  end)
+
+{:ok, stream} = TurnStream.wait(stream)
+:ok = TurnStream.ensure_success(stream)
+{:ok, %{"languages" => _}} = TurnStream.final_json(stream)
 ```
 
 To observe streamed events (deltas, item updates, token usage) while a turn
@@ -64,7 +77,10 @@ runs, subscribe before starting it — every parsed server event arrives as
 ```elixir
 :ok = Client.subscribe(client)
 
-{:ok, _stream} = Thread.run(thread, [%{"type" => "text", "text" => "Go"}])
+{:ok, _stream} =
+  TurnStream.start_request(client, thread.id, fn ->
+    Client.start_turn(client, thread.id, [%{"type" => "text", "text" => "Go"}])
+  end)
 
 receive do
   {:codex_app_server_event, message} ->
@@ -72,22 +88,23 @@ receive do
 end
 ```
 
-Server-initiated requests (tool approvals, user-input elicitation) are answered
-by a `request_handler:` function passed to `Client.start_link/1` — note that
-pooled clients from `ClientManager` don't accept one, so use a dedicated
-client for approval flows:
+Server-initiated requests (tool approvals, user-input elicitation) are
+broadcast to subscribers. Read their request id with `Message.request_id/1`
+and answer with `Client.reply_request/4`:
 
 ```elixir
-{:ok, client} =
-  Client.start_link(
-    transport: :stdio,
-    request_handler: fn _request -> %{"decision" => "approved"} end
-  )
+request =
+  receive do
+    {:codex_app_server_event, message} -> message
+  end
+
+request_id = CodexEx.AppServer.Message.request_id(request)
+:ok = Client.reply_request(client, request_id, {:ok, %{"decision" => "approved"}})
 ```
 
 Resume an existing thread by id with `Client.resume_thread(client, thread_id)`;
-fork, archive, goals, model/skill listing, and fuzzy file search are all on
-`Client`/`Thread` — see the module reference below.
+fork, archive, goals, model/skill listing, and fuzzy file search are on `Client`.
+`Thread` provides snapshot refresh and paginated turn reads.
 
 ## Host integration
 
@@ -134,7 +151,7 @@ ClientRegistry (unique Registry, key = connection identity)
 ClientManager (singleton; monitors registered Clients)
 ClientSupervisor (DynamicSupervisor)
   └─ Client (one per unique connection key, :temporary)
-       State: session pid, subscribers, pending requests, request handler
+       State: session pid, subscribers, pending requests
        │
        └─ Session (one per Client, linked)
             State: JSON-RPC framing, pending request map, buffer
@@ -145,9 +162,9 @@ ClientSupervisor (DynamicSupervisor)
                  └─ any host-provided Transport module (e.g. a remote bridge)
 ```
 
-Additionally, each `Client.run/4` call spawns a `TurnStream` GenServer
-(one per active turn) that collects streamed notifications until the turn
-completes.
+Additionally, each `TurnStream.start_request/4` call spawns a `TurnStream`
+GenServer (one per active turn) that collects streamed notifications until the
+turn completes.
 
 All Clients are started under `CodexEx.ClientSupervisor`
 (a DynamicSupervisor) with `:temporary` restart — they do not restart on
@@ -168,9 +185,8 @@ Central GenServer wrapping a single app-server connection. Exposes the
 full domain API (threads, turns, goals, models, skills, fuzzy search)
 and manages subscriber fan-out for streamed server events.
 
-The client owns its `Session`, initialize result, thread-scoped subscribers,
-pending server requests, model-list cache, replay-gap ownership, and optional
-request handler.
+The client owns its `Session`, thread-scoped subscribers, pending server
+requests, model-list cache, and replay-gap ownership.
 
 **Timeouts:**
 - Default RPC: 15 seconds
@@ -187,8 +203,8 @@ prevents the Client GenServer from blocking on slow network calls.
 **Key operations:**
 - Thread lifecycle: `start_thread`, `resume_thread`, `read_thread`,
   `fork_thread`, `archive_thread`, `unarchive_thread`,
-  `start_thread_compaction`, `rollback_thread`, `revert_thread`
-- Turn lifecycle: `run` (via TurnStream), `start_turn_request`, `steer_turn`,
+  `start_thread_compaction`, `revert_thread`
+- Turn lifecycle: `start_turn`, `start_turn_request`, `steer_turn`,
   `interrupt_turn`
 - Goals: `set_thread_goal`, `get_thread_goal`, `clear_thread_goal`
 - Capabilities: `list_models`, `list_skills`, `list_threads`,
@@ -199,11 +215,10 @@ prevents the Client GenServer from blocking on slow network calls.
   `{:codex_app_server_event, Message.t()}` for every parsed server event
 
 **Server-initiated request handling:**
-When the server sends a request (tool approval, MCP elicitation), the
-Client parses it via `Protocol.Parser`, broadcasts to subscribers, and
-(if a `request_handler` function is configured) spawns a task to compute
-the reply. The task calls `Client.reply_request/4`, which sends
-the response through `Session`.
+When the server sends a request (tool approval, MCP elicitation), the Client
+parses it via `Protocol.Parser` and broadcasts it to subscribers. A subscriber
+answers with `Client.reply_request/4`, which sends the response through
+`Session`.
 
 #### `ClientManager`
 
@@ -217,8 +232,7 @@ exclude local-only observer flags so deploys can reattach retained sessions.
 
 `get_client/1` runs in the caller: it returns the registered client for the key
 or starts one under `CodexEx.ClientSupervisor`; concurrent starts for one key
-resolve to a single client through the unique registry name. Shared clients disallow
-`request_handler` (it would be ambiguous with multiple consumers).
+resolve to a single client through the unique registry name.
 
 #### `Session`
 
@@ -245,7 +259,7 @@ the transport handle, and ordered transport acknowledgement state.
 #### `TurnStream`
 
 GenServer that collects streamed notifications for a single agent turn.
-Started by `Client.run/4`, it correlates items, text deltas, turn
+Started by `TurnStream.start_request/4`, it correlates items, text deltas, turn
 events, and token usage into a coherent result.
 
 **Public struct:**
@@ -464,12 +478,9 @@ Routes raw JSON-RPC payloads to the appropriate typed struct.
 
 **Dispatch logic:**
 - **Notifications:** if `ServerNotification.known_method?(method)` →
-  `%ServerNotification{}`; else (and not strict) → `%GenericNotification{}`
+  `%ServerNotification{}`; else → `%GenericNotification{}`
 - **Requests:** if `ServerRequest.known_method?(method)` →
   full `ServerRequest.decode(payload)`; else → `%GenericServerRequest{}`
-- **Strict mode:** unknown methods return
-  `{:error, {:unknown_method, kind, method}}` instead of falling back to
-  generic types
 
 #### `Protocol.Verifier`
 
@@ -502,10 +513,8 @@ Service object pairing a `Client` pid with a `ThreadSnapshot`.
 %Thread{client: Client.t(), id: binary(), snapshot: ThreadSnapshot.t()}
 ```
 
-Provides convenience methods that delegate to `Client`:
-`refresh`, `fork`, `archive`, `unarchive`, `set_goal`, `get_goal`,
-`clear_goal`, `list_turns_page`, `run`, `run_text`, `run_json`. Full history
-reads use paginated turns; legacy full-history reads fail explicitly.
+Provides `refresh` and `list_turns_page` convenience methods. Full history reads
+use paginated turns; legacy full-history reads fail explicitly.
 
 #### `ThreadSnapshot`
 
@@ -702,10 +711,8 @@ Transport receives request bytes
   → Session parses, sends {:request, id, payload} to Client
   → Client parses via Protocol.Parser.parse(:request, payload)
   → Client broadcasts to subscribers
-  → If request_handler configured:
-      Spawns Task → request_handler.(message) → reply map
-      → Client.reply_request(client, request_id, reply)
-      → Session sends JSON-RPC response with matching id
+  → Subscriber calls Client.reply_request(client, request_id, reply)
+  → Session sends JSON-RPC response with matching id
 ```
 
 ---
@@ -725,13 +732,6 @@ Host applications typically wrap thread operations with a stale-client
 retry (see `App.Runtime.Execution.SessionRemoteThreadOps.with_stale_client_retry/5`
 in the reference host): if the initial attempt returns a stale-session error,
 reconnect with a fresh client and retry once.
-
-### Strict vs. Permissive Protocol
-
-The `strict_protocol` flag (passed through to `Protocol.Parser`)
-controls whether unknown methods are errors or silently wrapped in
-generic types. Production runs permissive; tests can enable strict mode
-to catch schema drift.
 
 ### Schema → Code Pipeline
 

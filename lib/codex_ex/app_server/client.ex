@@ -3,8 +3,7 @@ defmodule CodexEx.AppServer.Client do
   Public entrypoint for the Codex app-server client.
 
   This module owns the long-lived session process, exposes the thread and turn
-  request helpers, broadcasts parsed server events to subscribers, and can
-  auto-reply to server-initiated requests through `register_request_handler/2`.
+  request helpers and broadcasts parsed server events to subscribers.
   """
 
   use GenServer
@@ -58,7 +57,6 @@ defmodule CodexEx.AppServer.Client do
   alias CodexEx.AppServer.Protocol.Generated.V2.ThreadRealtimeStopParams
   alias CodexEx.AppServer.Protocol.Generated.V2.ThreadResumeParams
   alias CodexEx.AppServer.Protocol.Generated.V2.ThreadRevertParams
-  alias CodexEx.AppServer.Protocol.Generated.V2.ThreadRollbackParams
   alias CodexEx.AppServer.Protocol.Generated.V2.ThreadSetNameParams
   alias CodexEx.AppServer.Protocol.Generated.V2.ThreadStartedNotification
   alias CodexEx.AppServer.Protocol.Generated.V2.ThreadStartParams
@@ -149,14 +147,8 @@ defmodule CodexEx.AppServer.Client do
           | {:via, atom(), term()}
   @type t :: pid() | registered_name()
   @type request_timeout :: timeout()
-  @type request_handler_reply ::
-          Message.supported_reply_payload()
-          | {:ok, Message.supported_reply_payload()}
-          | {:error, term()}
-  @type request_handler :: (term() -> request_handler_reply())
   @type request_result :: {:ok, Message.supported_reply_payload()} | {:error, term()}
   @type client_call_error :: {:client_call_failed, term()} | {:defer_failed, term()}
-  @type initialize_response :: %InitializeResponse{}
   @type experimental_feature_enablement_set_response ::
           %ExperimentalFeatureEnablementSetResponse{}
   @type experimental_feature_list_response :: %ExperimentalFeatureListResponse{}
@@ -183,7 +175,6 @@ defmodule CodexEx.AppServer.Client do
         }
   @type turn_interrupt_response :: %TurnInterruptResponse{}
   @type state :: %{
-          initialize_result: initialize_response(),
           model_list_cache: model_list_response() | nil,
           model_list_pending: pending_model_list_request() | nil,
           pending_requests: pending_request_map(),
@@ -192,16 +183,13 @@ defmodule CodexEx.AppServer.Client do
           broadcasts_thread_activity?: boolean(),
           thread_activity_runner_id: binary() | nil,
           thread_activity_workspace_id: binary() | nil,
-          request_handler: request_handler() | nil,
           session: Session.t(),
-          strict_protocol: boolean(),
           subscribers: subscriber_map()
         }
   # The generated protocol modules and deferred GenServer reply path make these
   # exported wrappers appear less precise to Dialyzer than the normalized API.
   @dialyzer {:nowarn_function,
              [
-               initialize_result: 1,
                build_initialize_params: 1,
                reply_request: 4,
                list_experimental_features: 2,
@@ -219,7 +207,6 @@ defmodule CodexEx.AppServer.Client do
                stop_fuzzy_file_search_session: 2,
                start_thread: 2,
                start_thread_compaction: 2,
-               rollback_thread: 3,
                start_review: 4,
                start_review: 5,
                resume_thread: 3,
@@ -232,8 +219,6 @@ defmodule CodexEx.AppServer.Client do
                start_realtime: 3,
                stop_realtime: 2,
                start_turn: 4,
-               run: 4,
-               run: 5,
                steer_turn: 5,
                steer_turn: 6,
                interrupt_turn: 4,
@@ -248,11 +233,6 @@ defmodule CodexEx.AppServer.Client do
 
   @spec connect(keyword()) :: GenServer.on_start()
   def connect(opts \\ []), do: start_link(opts)
-
-  @spec disconnect(t(), term(), timeout()) :: :ok
-  def disconnect(client, reason \\ :normal, timeout \\ @default_timeout) do
-    GenServer.stop(client_server(client), reason, timeout)
-  end
 
   @spec subscribe(t(), pid()) :: :ok | {:error, {:client_call_failed, term()}}
   def subscribe(client, subscriber \\ self()) when is_pid(subscriber) do
@@ -270,7 +250,6 @@ defmodule CodexEx.AppServer.Client do
       {:subscribe, subscriber, thread_id, reconciles_replay_gap?},
       @default_timeout
     )
-    |> normalize_ok_reply()
   end
 
   @spec unsubscribe(t(), pid()) :: :ok | {:error, {:client_call_failed, term()}}
@@ -278,7 +257,6 @@ defmodule CodexEx.AppServer.Client do
     client
     |> client_server()
     |> safe_client_call({:unsubscribe, subscriber}, @default_timeout)
-    |> normalize_ok_reply()
   end
 
   @doc """
@@ -306,28 +284,7 @@ defmodule CodexEx.AppServer.Client do
 
       {:error, _reason} = error ->
         error
-
-      other ->
-        {:error, {:unexpected_client_reply, other}}
     end
-  end
-
-  @spec register_request_handler(t(), (term() -> term()) | nil) ::
-          :ok | {:error, {:client_call_failed, term()}}
-  def register_request_handler(client, handler) when is_function(handler, 1) or is_nil(handler) do
-    client
-    |> client_server()
-    |> safe_client_call({:register_request_handler, handler}, @default_timeout)
-    |> normalize_ok_reply()
-  end
-
-  @spec initialize_result(t()) ::
-          {:ok, initialize_response()} | {:error, {:client_call_failed, term()}}
-  def initialize_result(client) do
-    client
-    |> client_server()
-    |> safe_client_call(:initialize_result, @default_timeout)
-    |> normalize_initialize_result_reply()
   end
 
   @spec pending_requests(t()) :: {:ok, [term()]} | {:error, term()}
@@ -335,7 +292,6 @@ defmodule CodexEx.AppServer.Client do
     client
     |> client_server()
     |> safe_client_call(:pending_requests, @default_timeout)
-    |> normalize_pending_requests_reply()
   end
 
   @doc "Queues replay-gap acknowledgement on the client generation that reported it."
@@ -355,7 +311,6 @@ defmodule CodexEx.AppServer.Client do
       {:experimental_feature_list, ExperimentalFeatureListParams.decode(params), @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_experimental_feature_list_result()
   end
 
   @spec set_experimental_feature_enablement(t(), map()) ::
@@ -373,7 +328,6 @@ defmodule CodexEx.AppServer.Client do
       {:experimental_feature_enablement_set, params, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_experimental_feature_enablement_set_result()
   end
 
   @spec list_hooks(t(), [binary()]) ::
@@ -385,7 +339,6 @@ defmodule CodexEx.AppServer.Client do
       {:hooks_list, %HooksListParams{cwds: cwds}, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_hooks_list_result()
   end
 
   @spec trust_hook(t(), binary(), binary(), timeout()) ::
@@ -398,7 +351,6 @@ defmodule CodexEx.AppServer.Client do
       {:config_batch_write, hook_trust_params(hook_key, current_hash), timeout},
       call_timeout_for(timeout)
     )
-    |> normalize_config_write_result()
   end
 
   @spec set_hook_enabled(t(), binary(), boolean(), timeout()) ::
@@ -411,7 +363,6 @@ defmodule CodexEx.AppServer.Client do
       {:config_batch_write, hook_enabled_params(hook_key, enabled?), timeout},
       call_timeout_for(timeout)
     )
-    |> normalize_config_write_result()
   end
 
   @spec reply_request(t(), term(), request_result(), timeout()) :: :ok | {:error, term()}
@@ -419,7 +370,6 @@ defmodule CodexEx.AppServer.Client do
     client
     |> client_server()
     |> safe_client_call({:reply_request, request_id, reply, timeout}, call_timeout_for(timeout))
-    |> normalize_empty_result()
   end
 
   @spec list_models(t()) ::
@@ -431,7 +381,6 @@ defmodule CodexEx.AppServer.Client do
       {:model_list, ModelListParams.decode(%{}), @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_model_list_result()
   end
 
   @spec list_skills(t(), map()) ::
@@ -443,7 +392,6 @@ defmodule CodexEx.AppServer.Client do
       {:skills_list, SkillsListParams.decode(params), @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_skills_list_result()
   end
 
   @doc "Reads one MCP resource in the active thread's server scope."
@@ -459,7 +407,6 @@ defmodule CodexEx.AppServer.Client do
       {:mcp_resource_read, params, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_mcp_resource_read_result()
   end
 
   @doc "Calls one MCP tool in the active thread's server scope."
@@ -480,7 +427,6 @@ defmodule CodexEx.AppServer.Client do
       {:mcp_server_tool_call, params, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_mcp_server_tool_call_result()
   end
 
   @spec list_threads(t(), map()) ::
@@ -492,7 +438,6 @@ defmodule CodexEx.AppServer.Client do
       {:thread_list, build_thread_list_params(params), @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_thread_list_result()
   end
 
   @doc "Searches workspace roots without creating a thread or a search session."
@@ -505,7 +450,6 @@ defmodule CodexEx.AppServer.Client do
       {:fuzzy_file_search, %FuzzyFileSearchParams{query: query, roots: roots}, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_struct_result(FuzzyFileSearchResponse)
   end
 
   @spec start_fuzzy_file_search_session(t(), binary(), [binary()]) ::
@@ -518,7 +462,6 @@ defmodule CodexEx.AppServer.Client do
        @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_fuzzy_file_search_session_start_result()
   end
 
   @spec update_fuzzy_file_search_session(t(), binary(), binary()) ::
@@ -531,7 +474,6 @@ defmodule CodexEx.AppServer.Client do
        @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_fuzzy_file_search_session_update_result()
   end
 
   @spec stop_fuzzy_file_search_session(t(), binary()) ::
@@ -543,7 +485,6 @@ defmodule CodexEx.AppServer.Client do
       {:fuzzy_file_search_session_stop, %FuzzyFileSearchSessionStopParams{session_id: session_id}, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_fuzzy_file_search_session_stop_result()
   end
 
   @spec start_thread(t(), map()) :: {:ok, Thread.t()} | {:error, term()}
@@ -557,7 +498,6 @@ defmodule CodexEx.AppServer.Client do
         {:thread_start, params, settings_seed, @default_timeout},
         call_timeout_for(@default_timeout)
       )
-      |> normalize_thread_call_result()
     end
   end
 
@@ -571,12 +511,11 @@ defmodule CodexEx.AppServer.Client do
          {:ok, overrides} <- apply_thread_settings_seed(overrides, settings_seed) do
       params = build_thread_resume_params(thread_id, overrides)
 
-      client
-      |> safe_client_call(
+      safe_client_call(
+        client,
         {:thread_resume, params, settings_seed, @default_timeout},
         call_timeout_for(@default_timeout)
       )
-      |> normalize_thread_call_result()
     end
   end
 
@@ -598,7 +537,6 @@ defmodule CodexEx.AppServer.Client do
       {:config_read, params, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_config_read_source_result()
   end
 
   @spec read_thread(t(), binary(), keyword()) :: {:ok, ThreadSnapshot.t()} | {:error, term()}
@@ -617,7 +555,6 @@ defmodule CodexEx.AppServer.Client do
       {:thread_read, params, history_mode, timeout},
       call_timeout_for(timeout)
     )
-    |> normalize_thread_snapshot_call_result()
   end
 
   @doc "Lists one page of a paginated thread's turns in the requested server order."
@@ -659,7 +596,6 @@ defmodule CodexEx.AppServer.Client do
       {:thread_fork, params, settings_seed, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_thread_call_result()
   end
 
   @doc "Injects model-visible history items without starting a turn."
@@ -676,7 +612,6 @@ defmodule CodexEx.AppServer.Client do
       {:thread_inject_items, params, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_empty_result()
   end
 
   @doc "Unsubscribes the app-server connection from a remote thread."
@@ -691,7 +626,6 @@ defmodule CodexEx.AppServer.Client do
       {:thread_unsubscribe, params, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_thread_unsubscribe_result()
   end
 
   # Replies come from the external GenServer boundary; Dialyzer cannot prove the
@@ -707,7 +641,6 @@ defmodule CodexEx.AppServer.Client do
       {:thread_revert, params, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_thread_call_result()
   end
 
   @spec archive_thread(t(), binary()) :: :ok | {:error, term()}
@@ -718,7 +651,6 @@ defmodule CodexEx.AppServer.Client do
       {:thread_archive, %ThreadArchiveParams{thread_id: thread_id}, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_empty_result()
   end
 
   @spec set_thread_name(t(), binary(), binary()) :: :ok | {:error, term()}
@@ -731,7 +663,6 @@ defmodule CodexEx.AppServer.Client do
       {:thread_name_set, params, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_empty_result()
   end
 
   @spec start_thread_compaction(t(), binary()) :: :ok | {:error, term()}
@@ -742,19 +673,6 @@ defmodule CodexEx.AppServer.Client do
       {:thread_compact_start, %ThreadCompactStartParams{thread_id: thread_id}, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_empty_result()
-  end
-
-  @spec rollback_thread(t(), binary(), non_neg_integer()) :: {:ok, Thread.t()} | {:error, term()}
-  def rollback_thread(client, thread_id, num_turns)
-      when is_binary(thread_id) and is_integer(num_turns) and num_turns >= 1 do
-    client
-    |> client_server()
-    |> safe_client_call(
-      {:thread_rollback, %ThreadRollbackParams{thread_id: thread_id, num_turns: num_turns}, @thread_history_timeout},
-      call_timeout_for(@thread_history_timeout)
-    )
-    |> normalize_thread_call_result()
   end
 
   @spec set_thread_goal(t(), binary(), map()) :: {:ok, ThreadGoal.t()} | {:error, term()}
@@ -767,7 +685,6 @@ defmodule CodexEx.AppServer.Client do
       {:thread_goal_set, params, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_thread_goal_call_result()
   end
 
   @spec get_thread_goal(t(), binary()) :: {:ok, ThreadGoal.t() | nil} | {:error, term()}
@@ -778,7 +695,6 @@ defmodule CodexEx.AppServer.Client do
       {:thread_goal_get, %ThreadGoalGetParams{thread_id: thread_id}, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_thread_goal_get_call_result()
   end
 
   @spec clear_thread_goal(t(), binary()) :: :ok | {:error, term()}
@@ -789,7 +705,6 @@ defmodule CodexEx.AppServer.Client do
       {:thread_goal_clear, %ThreadGoalClearParams{thread_id: thread_id}, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_empty_result()
   end
 
   @spec start_review(t(), binary(), map(), binary() | nil, boolean()) ::
@@ -823,7 +738,6 @@ defmodule CodexEx.AppServer.Client do
       {:thread_unarchive, %ThreadUnarchiveParams{thread_id: thread_id}, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_thread_call_result()
   end
 
   @spec start_realtime(t(), binary(), binary()) :: :ok | {:error, term()}
@@ -841,7 +755,6 @@ defmodule CodexEx.AppServer.Client do
       {:thread_realtime_start, params, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_empty_result()
   end
 
   @spec stop_realtime(t(), binary()) :: :ok | {:error, term()}
@@ -852,46 +765,12 @@ defmodule CodexEx.AppServer.Client do
       {:thread_realtime_stop, %ThreadRealtimeStopParams{thread_id: thread_id}, @default_timeout},
       call_timeout_for(@default_timeout)
     )
-    |> normalize_empty_result()
-  end
-
-  @spec run(t(), binary(), [map()], map(), boolean()) ::
-          {:ok, TurnStream.t()} | {:error, term()}
-  def run(client, thread_id, input, opts \\ %{}, direct_stream? \\ true)
-      when is_binary(thread_id) and is_list(input) and is_map(opts) and is_boolean(direct_stream?) do
-    params = build_turn_start_params(thread_id, input, opts)
-
-    TurnStream.start(client, thread_id, params, direct_stream?)
   end
 
   @doc "Starts a turn and returns its initial protocol state without collecting its event stream."
   @spec start_turn(t(), binary(), [map()], map()) :: {:ok, Turn.t()} | {:error, term()}
   def start_turn(client, thread_id, input, opts \\ %{}) when is_binary(thread_id) and is_list(input) and is_map(opts) do
     start_turn_request(client, build_turn_start_params(thread_id, input, opts), @default_timeout)
-  end
-
-  @spec run_text(t(), binary(), binary(), map()) :: {:ok, binary()} | {:error, term()}
-  def run_text(client, thread_id, text, opts \\ %{}) when is_binary(thread_id) and is_binary(text) and is_map(opts) do
-    with {:ok, stream} <- run(client, thread_id, [%{"type" => "text", "text" => text}], opts),
-         {:ok, stream} <- TurnStream.wait(stream, @turn_timeout),
-         :ok <- TurnStream.ensure_success(stream) do
-      {:ok, stream.final_text}
-    end
-  end
-
-  @spec run_json(t(), binary(), binary(), map(), map()) :: {:ok, term()} | {:error, term()}
-  def run_json(client, thread_id, text, output_schema, opts \\ %{})
-      when is_binary(thread_id) and is_binary(text) and is_map(output_schema) and is_map(opts) do
-    opts =
-      opts
-      |> MapHelpers.deep_stringify_keys()
-      |> Map.put("outputSchema", MapHelpers.deep_stringify_keys(output_schema))
-
-    with {:ok, stream} <- run(client, thread_id, [%{"type" => "text", "text" => text}], opts),
-         {:ok, stream} <- TurnStream.wait(stream, @turn_timeout),
-         :ok <- TurnStream.ensure_success(stream) do
-      TurnStream.final_json(stream)
-    end
   end
 
   @spec steer_turn(t(), binary(), binary(), [map()], binary(), timeout()) ::
@@ -904,7 +783,6 @@ defmodule CodexEx.AppServer.Client do
     client
     |> client_server()
     |> safe_client_call({:turn_steer, params, timeout}, call_timeout_for(timeout))
-    |> normalize_turn_steer_call_result()
   end
 
   @spec interrupt_turn(t(), binary(), binary(), timeout()) ::
@@ -916,7 +794,6 @@ defmodule CodexEx.AppServer.Client do
     client
     |> client_server()
     |> safe_client_call({:turn_interrupt, params, timeout}, call_timeout_for(timeout))
-    |> normalize_turn_interrupt_call_result()
   end
 
   @spec start_turn_request(t(), map(), timeout()) :: {:ok, Turn.t()} | {:error, term()}
@@ -925,7 +802,6 @@ defmodule CodexEx.AppServer.Client do
     client
     |> client_server()
     |> safe_client_call({:turn_start_request, params, timeout}, call_timeout_for(timeout))
-    |> normalize_turn_start_call_result()
   end
 
   @spec start_review_request(t(), map(), timeout()) :: {:ok, Turn.t()} | {:error, term()}
@@ -934,7 +810,6 @@ defmodule CodexEx.AppServer.Client do
     client
     |> client_server()
     |> safe_client_call({:review_start_request, params, timeout}, call_timeout_for(timeout))
-    |> normalize_turn_start_call_result()
   end
 
   @impl true
@@ -949,18 +824,16 @@ defmodule CodexEx.AppServer.Client do
 
     session_opts =
       opts
-      |> Keyword.drop([:name, :initialize_params, :subscriber, :broadcasts_thread_activity?])
+      |> Keyword.drop([:name, :initialize_params, :broadcasts_thread_activity?])
       |> Keyword.put(:notification_target, self())
 
-    with {:ok, subscribers} <- initial_subscribers(opts),
-         {:ok, session} <- Session.start_link(session_opts),
+    with {:ok, session} <- Session.start_link(session_opts),
          {:ok, result} <- Session.initialize(session, initialize_params),
-         {:ok, initialize_result} <- normalize_initialize_result({:ok, result}) do
+         {:ok, %InitializeResponse{}} <- normalize_initialize_result({:ok, result}) do
       {:ok,
        %{
          session: session,
-         subscribers: subscribers,
-         initialize_result: initialize_result,
+         subscribers: %{},
          model_list_cache: nil,
          model_list_pending: nil,
          pending_requests: %{},
@@ -968,9 +841,7 @@ defmodule CodexEx.AppServer.Client do
          replay_gap_owners: MapSet.new(),
          broadcasts_thread_activity?: Keyword.get(opts, :broadcasts_thread_activity?, false),
          thread_activity_runner_id: Keyword.get(opts, :runner_id),
-         thread_activity_workspace_id: Keyword.get(opts, :workspace_id),
-         request_handler: Keyword.get(opts, :request_handler),
-         strict_protocol: Keyword.get(opts, :strict_protocol, false)
+         thread_activity_workspace_id: Keyword.get(opts, :workspace_id)
        }}
     else
       {:error, reason} ->
@@ -983,11 +854,6 @@ defmodule CodexEx.AppServer.Client do
       when is_pid(owner) and is_integer(through_sequence) and through_sequence >= 0 do
     state = handle_async_replay_gap_ack(state, owner, through_sequence)
     {:noreply, state}
-  end
-
-  @impl true
-  def handle_call(:initialize_result, _from, state) do
-    {:reply, {:ok, state.initialize_result}, state}
   end
 
   def handle_call(:thread_activity_origin, _from, state) do
@@ -1044,11 +910,6 @@ defmodule CodexEx.AppServer.Client do
   @impl true
   def handle_call({:unsubscribe, subscriber}, _from, state) do
     {:reply, :ok, remove_subscriber(state, subscriber)}
-  end
-
-  @impl true
-  def handle_call({:register_request_handler, handler}, _from, state) do
-    {:reply, :ok, %{state | request_handler: handler}}
   end
 
   @impl true
@@ -1217,31 +1078,6 @@ defmodule CodexEx.AppServer.Client do
   end
 
   @impl true
-  def handle_call({:thread_rollback, params, timeout}, from, state) do
-    client = self()
-    thread_id = ProtocolValue.get(params, :thread_id)
-
-    :ok =
-      defer_reply(from, state.session, fn session ->
-        read_params = %ThreadReadParams{thread_id: thread_id, include_turns: true}
-
-        with {:ok, preflight_snapshot} <- read_thread_metadata(session, read_params, timeout),
-             :ok <- require_paginated_history_mode(preflight_snapshot.history_mode),
-             {:ok, result} <- Session.request(session, "thread/rollback", params, timeout) do
-          case normalize_thread_result({:ok, result}, client) do
-            {:ok, %Thread{} = thread} ->
-              {:ok, thread}
-
-            {:error, reason} ->
-              {:error, {:thread_rollback_applied_but_refresh_failed, reason}}
-          end
-        end
-      end)
-
-    {:noreply, state}
-  end
-
-  @impl true
   def handle_call({:thread_unarchive, params, timeout}, from, state) do
     client = self()
 
@@ -1328,11 +1164,6 @@ defmodule CodexEx.AppServer.Client do
   end
 
   @impl true
-  def handle_info({:request_handler_replied, request_id}, state) do
-    {:noreply, resolve_replied_request(state, request_id)}
-  end
-
-  @impl true
   def handle_info({:model_list_result, ref, reply}, %{model_list_pending: %{ref: ref, callers: callers}} = state) do
     Enum.each(callers, &GenServer.reply(&1, reply))
 
@@ -1373,26 +1204,6 @@ defmodule CodexEx.AppServer.Client do
   defp session_exit_reason(:shutdown), do: :shutdown
   defp session_exit_reason({:shutdown, _reason} = reason), do: reason
   defp session_exit_reason(reason), do: {:session_exited, reason}
-
-  defp initial_subscribers(opts) do
-    case Keyword.fetch(opts, :subscriber) do
-      {:ok, subscriber} when is_pid(subscriber) ->
-        {:ok,
-         %{
-           subscriber => %{
-             monitor_ref: Process.monitor(subscriber),
-             thread_id: :all,
-             reconciles_replay_gap?: false
-           }
-         }}
-
-      {:ok, subscriber} ->
-        {:error, {:invalid_subscriber, subscriber}}
-
-      :error ->
-        {:ok, %{}}
-    end
-  end
 
   @doc "Builds normalized app-server initialization parameters with required client capabilities."
   @spec build_initialize_params(map()) :: map()
@@ -1947,183 +1758,33 @@ defmodule CodexEx.AppServer.Client do
     {:error, {:protocol_error, {:unexpected_turn_interrupt_result, payload}}}
   end
 
-  defp normalize_ok_reply(:ok), do: :ok
-  defp normalize_ok_reply({:error, {:client_call_failed, _reason}} = error), do: error
-  defp normalize_ok_reply(other), do: {:error, {:client_call_failed, {:unexpected_reply, other}}}
-
-  defp normalize_initialize_result_reply({:ok, %InitializeResponse{} = result}), do: {:ok, result}
-
-  defp normalize_initialize_result_reply({:error, {:client_call_failed, _reason}} = error), do: error
-
-  defp normalize_initialize_result_reply(other), do: {:error, {:client_call_failed, {:unexpected_reply, other}}}
-
-  defp normalize_pending_requests_reply({:ok, requests}) when is_list(requests), do: {:ok, requests}
-
-  defp normalize_pending_requests_reply({:error, {:client_call_failed, _reason}} = error), do: error
-
-  defp normalize_pending_requests_reply(other), do: {:error, {:client_call_failed, {:unexpected_reply, other}}}
-
   defp normalize_request_reply({:ok, payload}), do: {:ok, {:ok, payload}}
 
   defp normalize_request_reply({:error, _reason} = error), do: {:ok, error}
 
   defp normalize_request_reply(other), do: {:error, {:unsupported_request_reply, other}}
 
-  defp normalize_model_list_result(result), do: normalize_struct_result(result, ModelListResponse)
-
-  defp normalize_experimental_feature_list_result(result),
-    do: normalize_struct_result(result, ExperimentalFeatureListResponse)
-
-  defp normalize_experimental_feature_enablement_set_result(result),
-    do: normalize_struct_result(result, ExperimentalFeatureEnablementSetResponse)
-
-  defp normalize_skills_list_result(result), do: normalize_struct_result(result, SkillsListResponse)
-
-  defp normalize_mcp_resource_read_result({:ok, %McpResourceReadResponse{} = response}), do: {:ok, response}
-
-  defp normalize_mcp_resource_read_result({:error, _reason} = error), do: error
-
-  defp normalize_mcp_resource_read_result(other), do: {:error, {:unexpected_client_reply, other}}
-
-  defp normalize_mcp_server_tool_call_result({:ok, %McpServerToolCallResponse{} = response}), do: {:ok, response}
-
-  defp normalize_mcp_server_tool_call_result({:error, _reason} = error), do: error
-
-  defp normalize_mcp_server_tool_call_result(other), do: {:error, {:unexpected_client_reply, other}}
-
-  defp normalize_hooks_list_result(result), do: normalize_struct_result(result, HooksListResponse)
-
-  defp normalize_config_write_result(result), do: normalize_struct_result(result, ConfigWriteResponse)
-
-  defp normalize_thread_list_result({:ok, %ThreadListResponse{} = result}) do
-    with {:ok, snapshots} <- decode_thread_list_snapshots(result.data) do
-      {:ok, %{data: snapshots, next_cursor: result.next_cursor}}
-    end
-  end
-
-  defp normalize_thread_list_result({:error, _reason} = error), do: error
-  defp normalize_thread_list_result(other), do: {:error, {:unexpected_client_reply, other}}
-
-  defp normalize_fuzzy_file_search_session_start_result(result) do
-    with {:ok, _response} <- normalize_struct_result(result, FuzzyFileSearchSessionStartResponse),
-         do: {:ok, :started}
-  end
-
-  defp normalize_fuzzy_file_search_session_update_result(result) do
-    with {:ok, _response} <- normalize_struct_result(result, FuzzyFileSearchSessionUpdateResponse),
-         do: {:ok, :updated}
-  end
-
-  defp normalize_fuzzy_file_search_session_stop_result(result) do
-    with {:ok, _response} <- normalize_struct_result(result, FuzzyFileSearchSessionStopResponse),
-         do: :ok
-  end
-
-  defp normalize_thread_call_result({:ok, %Thread{client: client, id: id, settings: settings, snapshot: snapshot}}),
-    do: {:ok, %Thread{client: client, id: id, settings: settings, snapshot: snapshot}}
-
-  defp normalize_thread_call_result({:error, _reason} = error), do: error
-
-  defp normalize_thread_call_result(other), do: {:error, {:unexpected_client_reply, other}}
-
-  defp normalize_config_read_source_result(
-         {:ok, {%ConfigReadResponse{config: config, layers: layers, origins: origins}, raw_config}}
-       ), do: {:ok, {%ConfigReadResponse{config: config, layers: layers, origins: origins}, raw_config}}
-
-  defp normalize_config_read_source_result({:error, _reason} = error), do: error
-
-  defp normalize_config_read_source_result(other), do: {:error, {:unexpected_client_reply, other}}
-
-  defp normalize_thread_snapshot_call_result(result), do: normalize_struct_result(result, ThreadSnapshot)
-
-  defp normalize_struct_result({:ok, result}, module) when is_struct(result, module), do: {:ok, result}
-
-  defp normalize_struct_result({:error, _reason} = error, _module), do: error
-
-  defp normalize_struct_result(other, _module), do: {:error, {:unexpected_client_reply, other}}
-
-  defp normalize_thread_goal_call_result({:ok, %ThreadGoalSetResponse{goal: goal}}) do
-    case ThreadGoal.from_protocol(goal) do
-      {:ok, %ThreadGoal{} = parsed_goal} -> {:ok, parsed_goal}
-      {:error, reason} -> {:error, {:protocol_error, reason}}
-    end
-  end
-
-  defp normalize_thread_goal_call_result({:error, _reason} = error), do: error
-
-  defp normalize_thread_goal_call_result(other), do: {:error, {:unexpected_client_reply, other}}
-
-  defp normalize_thread_goal_get_call_result({:ok, %ThreadGoalGetResponse{goal: nil}}), do: {:ok, nil}
-
-  defp normalize_thread_goal_get_call_result({:ok, %ThreadGoalGetResponse{goal: goal}}) do
-    case ThreadGoal.from_protocol(goal) do
-      {:ok, %ThreadGoal{} = parsed_goal} -> {:ok, parsed_goal}
-      {:error, reason} -> {:error, {:protocol_error, reason}}
-    end
-  end
-
-  defp normalize_thread_goal_get_call_result({:error, _reason} = error), do: error
-
-  defp normalize_thread_goal_get_call_result(other), do: {:error, {:unexpected_client_reply, other}}
-
-  defp normalize_empty_result(:ok), do: :ok
-  defp normalize_empty_result({:error, _reason} = error), do: error
-  defp normalize_empty_result(other), do: {:error, {:unexpected_client_reply, other}}
-
-  defp normalize_thread_unsubscribe_result({:ok, %ThreadUnsubscribeResponse{} = response}), do: {:ok, response}
-
-  defp normalize_thread_unsubscribe_result({:error, _reason} = error), do: error
-
-  defp normalize_thread_unsubscribe_result(other), do: {:error, {:unexpected_client_reply, other}}
-
-  defp normalize_turn_steer_call_result({:ok, turn_id}) when is_binary(turn_id), do: {:ok, turn_id}
-
-  defp normalize_turn_steer_call_result({:error, _reason} = error), do: error
-  defp normalize_turn_steer_call_result(other), do: {:error, {:unexpected_client_reply, other}}
-
-  defp normalize_turn_interrupt_call_result(result), do: normalize_struct_result(result, TurnInterruptResponse)
-
-  defp normalize_turn_start_call_result(result), do: normalize_struct_result(result, Turn)
-
   defp handle_notification(payload, sequence, state) do
-    case Parser.parse(:notification, payload, strict_protocol: state.strict_protocol) do
-      {:ok, message} ->
-        state = resolve_pending_request(state, message)
+    {:ok, message} = Parser.parse(:notification, payload)
+    state = resolve_pending_request(state, message)
 
-        _ =
-          if state.broadcasts_thread_activity? do
-            maybe_broadcast_thread_activity(
-              message,
-              {self(), state.thread_activity_runner_id, state.thread_activity_workspace_id}
-            )
-          end
+    _ =
+      if state.broadcasts_thread_activity? do
+        maybe_broadcast_thread_activity(
+          message,
+          {self(), state.thread_activity_runner_id, state.thread_activity_workspace_id}
+        )
+      end
 
-        broadcast(matching_subscribers(state.subscribers, message), message)
-        {:noreply, acknowledge_transport_sequence(state, sequence)}
-
-      {:error, reason} ->
-        broadcast_protocol_error(state.subscribers, reason, payload)
-        {:noreply, acknowledge_transport_sequence(state, sequence)}
-    end
+    broadcast(matching_subscribers(state.subscribers, message), message)
+    {:noreply, acknowledge_transport_sequence(state, sequence)}
   end
 
   defp handle_server_request(payload, sequence, state) do
-    case Parser.parse(:request, payload, strict_protocol: state.strict_protocol) do
-      {:ok, message} ->
-        state = track_pending_request(state, message)
-        broadcast(matching_subscribers(state.subscribers, message), message)
-        maybe_handle_request(message, state)
-        {:noreply, acknowledge_transport_sequence(state, sequence)}
-
-      {:error, {:unknown_method, :request, method} = reason} ->
-        broadcast_protocol_error(state.subscribers, reason, payload)
-        maybe_reject_unknown_request(payload, method, state)
-        {:noreply, acknowledge_transport_sequence(state, sequence)}
-
-      {:error, reason} ->
-        broadcast_protocol_error(state.subscribers, reason, payload)
-        {:noreply, acknowledge_transport_sequence(state, sequence)}
-    end
+    {:ok, message} = Parser.parse(:request, payload)
+    state = track_pending_request(state, message)
+    broadcast(matching_subscribers(state.subscribers, message), message)
+    {:noreply, acknowledge_transport_sequence(state, sequence)}
   end
 
   defp handle_unmatched_response(payload, sequence, state) do
@@ -2135,12 +1796,6 @@ defmodule CodexEx.AppServer.Client do
   defp broadcast(subscribers, event) do
     Enum.each(Map.keys(subscribers), fn subscriber ->
       send(subscriber, {:codex_app_server_event, event})
-    end)
-  end
-
-  defp broadcast_protocol_error(subscribers, reason, payload) do
-    Enum.each(Map.keys(subscribers), fn subscriber ->
-      send(subscriber, {:codex_app_server_protocol_error, reason, payload})
     end)
   end
 
@@ -2403,8 +2058,59 @@ defmodule CodexEx.AppServer.Client do
 
   defp simple_request_success(_payload, :discard_response), do: :ok
 
+  defp simple_request_success(payload, ThreadListResponse) do
+    with {:ok, %ThreadListResponse{} = response} <- decode_simple_response(payload, ThreadListResponse),
+         {:ok, snapshots} <- decode_thread_list_snapshots(response.data) do
+      {:ok, %{data: snapshots, next_cursor: response.next_cursor}}
+    end
+  end
+
+  defp simple_request_success(payload, FuzzyFileSearchSessionStartResponse) do
+    with {:ok, %FuzzyFileSearchSessionStartResponse{}} <-
+           decode_simple_response(payload, FuzzyFileSearchSessionStartResponse),
+         do: {:ok, :started}
+  end
+
+  defp simple_request_success(payload, FuzzyFileSearchSessionUpdateResponse) do
+    with {:ok, %FuzzyFileSearchSessionUpdateResponse{}} <-
+           decode_simple_response(payload, FuzzyFileSearchSessionUpdateResponse),
+         do: {:ok, :updated}
+  end
+
+  defp simple_request_success(payload, FuzzyFileSearchSessionStopResponse) do
+    with {:ok, %FuzzyFileSearchSessionStopResponse{}} <-
+           decode_simple_response(payload, FuzzyFileSearchSessionStopResponse),
+         do: :ok
+  end
+
+  defp simple_request_success(payload, ThreadGoalSetResponse) do
+    with {:ok, %ThreadGoalSetResponse{goal: goal}} <- decode_simple_response(payload, ThreadGoalSetResponse),
+         do: decode_thread_goal(goal)
+  end
+
+  defp simple_request_success(payload, ThreadGoalGetResponse) do
+    with {:ok, %ThreadGoalGetResponse{goal: goal}} <- decode_simple_response(payload, ThreadGoalGetResponse),
+         do: decode_thread_goal(goal)
+  end
+
   defp simple_request_success(payload, response_module) when is_atom(response_module),
-    do: {:ok, response_module.decode(payload)}
+    do: decode_simple_response(payload, response_module)
+
+  defp decode_simple_response(payload, response_module) do
+    case response_module.decode(payload) do
+      response when is_struct(response, response_module) -> {:ok, response}
+      response -> {:error, {:protocol_error, {:unexpected_response, response_module, response}}}
+    end
+  end
+
+  defp decode_thread_goal(nil), do: {:ok, nil}
+
+  defp decode_thread_goal(goal) do
+    case ThreadGoal.from_protocol(goal) do
+      {:ok, %ThreadGoal{} = parsed_goal} -> {:ok, parsed_goal}
+      {:error, reason} -> {:error, {:protocol_error, reason}}
+    end
+  end
 
   defp defer_reply(from, session, fun) do
     :ok =
@@ -2438,88 +2144,6 @@ defmodule CodexEx.AppServer.Client do
   end
 
   defp maybe_cache_model_list_reply(state, _reply), do: state
-
-  defp maybe_reject_unknown_request(payload, method, %{session: session, strict_protocol: true}) do
-    case Map.get(payload, "id") do
-      request_id when not is_nil(request_id) ->
-        spawn_request_handler(session, request_id, fn ->
-          {:error, %{"code" => -32_602, "message" => "Unsupported app-server request method: #{method}"}}
-        end)
-
-      _other ->
-        :ok
-    end
-  end
-
-  defp maybe_reject_unknown_request(_payload, _method, _state), do: :ok
-
-  defp maybe_handle_request(message, %{request_handler: handler, session: session}) when is_function(handler, 1) do
-    case Message.request_id(message) do
-      nil ->
-        :ok
-
-      request_id ->
-        client = self()
-
-        spawn_request_handler(
-          session,
-          request_id,
-          fn -> normalize_request_handler_reply(handler.(message)) end,
-          fn -> send(client, {:request_handler_replied, request_id}) end
-        )
-    end
-  end
-
-  defp maybe_handle_request(_message, _state), do: :ok
-
-  defp spawn_request_handler(session, request_id, fun, on_reply \\ fn -> :ok end) do
-    :ok =
-      start_async_child(fn ->
-        reply =
-          try do
-            fun.()
-          rescue
-            error ->
-              {:error,
-               %{
-                 "code" => -32_604,
-                 "message" => "request handler failed: #{Exception.message(error)}"
-               }}
-          catch
-            :exit, reason ->
-              {:error, %{"code" => -32_603, "message" => "request handler exited: #{inspect(reason)}"}}
-          end
-
-        if Session.respond(session, request_id, reply, @default_timeout) == :ok do
-          on_reply.()
-        end
-      end)
-
-    :ok
-  end
-
-  defp normalize_request_handler_reply({:ok, result}), do: normalize_request_handler_result(result)
-
-  defp normalize_request_handler_reply({:error, _reason} = reply), do: reply
-
-  defp normalize_request_handler_reply(reply), do: normalize_request_handler_result(reply)
-
-  defp normalize_request_handler_result(result) do
-    if Message.supported_reply_payload?(result) do
-      {:ok, result}
-    else
-      reason = {:unsupported_request_reply_payload, result}
-      {:error, request_handler_payload_error(reason)}
-    end
-  end
-
-  defp request_handler_payload_error(reason) do
-    %{
-      "code" => -32_605,
-      "message" => "unsupported request handler reply payload",
-      "data" => %{"reason" => inspect(reason)}
-    }
-  end
 
   defp run_deferred(fun, session) do
     fun.(session)

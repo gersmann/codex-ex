@@ -33,7 +33,7 @@ defmodule CodexEx.AppServer.Protocol.ParserTest do
              Parser.parse(:notification, payload)
   end
 
-  test "falls back to generic envelopes for unknown methods when strict mode is off" do
+  test "falls back to generic envelopes for unknown request methods" do
     payload = %{"id" => "request-1", "method" => "custom/request", "params" => %{"value" => 1}}
 
     assert {:ok,
@@ -42,14 +42,7 @@ defmodule CodexEx.AppServer.Protocol.ParserTest do
               method: "custom/request",
               params: %{"value" => 1}
             }} =
-             Parser.parse(:request, payload, strict_protocol: false)
-  end
-
-  test "returns an error for unknown methods when strict mode is on" do
-    payload = %{"method" => "custom/notification", "params" => %{}}
-
-    assert {:error, {:unknown_method, :notification, "custom/notification"}} =
-             Parser.parse(:notification, payload, strict_protocol: true)
+             Parser.parse(:request, payload)
   end
 
   test "parses known server requests into typed envelopes" do
@@ -68,10 +61,10 @@ defmodule CodexEx.AppServer.Protocol.ParserTest do
              Parser.parse(:request, payload)
   end
 
-  test "falls back to generic notifications for unknown methods when strict mode is off" do
+  test "falls back to generic notifications for unknown methods" do
     payload = %{"method" => "custom/notification", "params" => %{"value" => 1}}
 
     assert {:ok, %GenericNotification{method: "custom/notification", params: %{"value" => 1}}} =
-             Parser.parse(:notification, payload, strict_protocol: false)
+             Parser.parse(:notification, payload)
   end
 end

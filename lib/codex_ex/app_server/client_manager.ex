@@ -19,7 +19,7 @@ defmodule CodexEx.AppServer.ClientManager do
 
   @type client_key ::
           {:client, transport :: term(), runner_id :: term(), url :: term(), executable :: term(), args :: term(),
-           workspace_id :: term(), workspace_root :: term(), initialize_params :: term(), strict_protocol :: boolean(),
+           workspace_id :: term(), workspace_root :: term(), initialize_params :: term(), legacy_strict_protocol :: false,
            proxy_only :: boolean(), broadcasts_thread_activity :: boolean()}
   @type get_client_result :: {:ok, Client.t()} | {:error, term()}
 
@@ -31,12 +31,11 @@ defmodule CodexEx.AppServer.ClientManager do
   @spec get_client(keyword()) :: get_client_result()
   def get_client(opts) when is_list(opts) do
     opts = normalize_client_opts(opts)
+    key = shared_client_key(opts)
 
-    with {:ok, key} <- normalize_key(opts) do
-      case Registry.lookup(@registry, key) do
-        [{pid, _value}] -> if Process.alive?(pid), do: {:ok, pid}, else: start_client(key, opts)
-        [] -> start_client(key, opts)
-      end
+    case Registry.lookup(@registry, key) do
+      [{pid, _value}] -> if Process.alive?(pid), do: {:ok, pid}, else: start_client(key, opts)
+      [] -> start_client(key, opts)
     end
   end
 
@@ -112,14 +111,6 @@ defmodule CodexEx.AppServer.ClientManager do
     end
   end
 
-  defp normalize_key(opts) when is_list(opts) do
-    if Keyword.get(opts, :request_handler) do
-      {:error, {:unsupported_shared_client_option, :request_handler}}
-    else
-      {:ok, shared_client_key(opts)}
-    end
-  end
-
   defp normalize_client_opts(opts) do
     if remote_transport?(Keyword.get(opts, :transport)) do
       Keyword.put(opts, :broadcasts_thread_activity?, true)
@@ -163,7 +154,6 @@ defmodule CodexEx.AppServer.ClientManager do
 
   defp shared_client_opts(key, opts) do
     opts
-    |> Keyword.delete(:request_handler)
     |> Keyword.put_new(:transport, :stdio)
     |> Keyword.put(:name, {:via, Registry, {@registry, key}})
     |> maybe_put_remote_transport_id(key)
@@ -188,11 +178,11 @@ defmodule CodexEx.AppServer.ClientManager do
   # flags out of the identity so adding or changing them cannot orphan a
   # daemon's retained app-server session.
   defp remote_transport_identity(
-         {:client, transport, runner_id, url, executable, args, workspace_id, workspace_root, initialize_params,
-          strict_protocol, _proxy_only, _broadcasts_thread_activity}
+         {:client, transport, runner_id, url, executable, args, workspace_id, workspace_root, initialize_params, false,
+          _proxy_only, _broadcasts_thread_activity}
        ) do
     {:client, stable_transport_identity(transport), runner_id, url, executable, args, workspace_id, workspace_root,
-     initialize_params, strict_protocol}
+     initialize_params, false}
   end
 
   defp stable_transport_identity(transport) do
@@ -204,9 +194,8 @@ defmodule CodexEx.AppServer.ClientManager do
 
     {:client, transport, Keyword.get(opts, :runner_id), Keyword.get(opts, :url), Keyword.get(opts, :executable),
      shared_args_identity(opts, transport), Keyword.get(opts, :workspace_id), Keyword.get(opts, :workspace_root),
-     Client.build_initialize_params(Keyword.get(opts, :initialize_params, %{})),
-     Keyword.get(opts, :strict_protocol, false), Keyword.get(opts, :proxy_only?, false),
-     Keyword.get(opts, :broadcasts_thread_activity?, false)}
+     Client.build_initialize_params(Keyword.get(opts, :initialize_params, %{})), false,
+     Keyword.get(opts, :proxy_only?, false), Keyword.get(opts, :broadcasts_thread_activity?, false)}
   end
 
   # Keep remote daemon transport ids stable across this local-only identity change.
