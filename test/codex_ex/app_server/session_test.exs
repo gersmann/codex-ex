@@ -267,6 +267,17 @@ defmodule CodexEx.AppServer.SessionTest do
              Session.start_link(executable: "missing-codex-app-server")
   end
 
+  test "calls to a dead session return the session_request_failed wrapper" do
+    session = spawn(fn -> :ok end)
+    ref = Process.monitor(session)
+    assert_receive {:DOWN, ^ref, :process, ^session, _reason}
+
+    assert {:error, {:session_request_failed, {:noproc, _call}}} = Session.request(session, "thread/read", %{})
+    assert {:error, {:session_request_failed, {:noproc, _call}}} = Session.acknowledge_replay_gap(session, 1)
+    assert {:error, {:session_request_failed, {:noproc, _call}}} = Session.acknowledge_transport_sequence(session, 1)
+    assert {:error, {:session_request_failed, {:noproc, _call}}} = Session.initialize(session)
+  end
+
   test "request accepts a named session server", %{mock: mock} do
     name = {:global, {:codex_named_session, self()}}
 

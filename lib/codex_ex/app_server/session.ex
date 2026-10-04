@@ -28,6 +28,7 @@ defmodule CodexEx.AppServer.Session do
           | :session_closed
           | {:protocol_error, term()}
           | {:transport_closed, term()}
+          | {:session_request_failed, term()}
   @type pending_request :: %{
           from: GenServer.from(),
           timer_ref: reference() | nil,
@@ -66,7 +67,7 @@ defmodule CodexEx.AppServer.Session do
 
     GenServer.call(server, {:request, method, params, timeout}, call_timeout(timeout))
   catch
-    :exit, reason -> {:error, {:session_call_failed, reason}}
+    :exit, reason -> {:error, {:session_request_failed, reason}}
   end
 
   @spec notify(t(), binary(), map() | list()) :: :ok | {:error, term()}
@@ -130,7 +131,7 @@ defmodule CodexEx.AppServer.Session do
   def acknowledge_replay_gap(server, through_sequence) when is_integer(through_sequence) and through_sequence >= 0 do
     GenServer.call(server, {:acknowledge_replay_gap, through_sequence}, @default_timeout)
   catch
-    :exit, reason -> {:error, {:session_call_failed, reason}}
+    :exit, reason -> {:error, {:session_request_failed, reason}}
   end
 
   @doc "Acknowledges ordered downstream handling through the given transport sequence."
@@ -138,7 +139,7 @@ defmodule CodexEx.AppServer.Session do
   def acknowledge_transport_sequence(server, sequence) when is_integer(sequence) and sequence >= 0 do
     GenServer.call(server, {:acknowledge_transport_sequence, sequence}, @default_timeout)
   catch
-    :exit, reason -> {:error, {:session_call_failed, reason}}
+    :exit, reason -> {:error, {:session_request_failed, reason}}
   end
 
   @impl true
@@ -709,7 +710,7 @@ defmodule CodexEx.AppServer.Session do
     timeout = timeout |> bounded_request_timeout() |> call_timeout()
     {:ok, GenServer.call(server, :initialize_bootstrap, timeout)}
   catch
-    :exit, reason -> {:error, {:session_call_failed, reason}}
+    :exit, reason -> {:error, {:session_request_failed, reason}}
   end
 
   defp session_close_reason(:remote_client_disconnected), do: :normal
