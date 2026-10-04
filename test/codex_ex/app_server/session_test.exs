@@ -235,6 +235,21 @@ defmodule CodexEx.AppServer.SessionTest do
     end
   end
 
+  test "replay gaps must carry an acknowledgeable through sequence", %{mock: mock} do
+    session = start_supervised!({Session, [transport: MockTransport, mock_pid: mock, notification_target: self()]})
+
+    gap = %{"transport_id" => "transport-1", "missing_through_sequence" => 3}
+    send(session, {:mock_replay_gap, gap})
+    assert_receive {:codex_app_server_replay_gap, ^gap}
+
+    ref = Process.monitor(session)
+    malformed = %{"transport_id" => "transport-1"}
+    send(session, {:mock_replay_gap, malformed})
+
+    assert_receive {:DOWN, ^ref, :process, ^session, {:protocol_error, {:invalid_replay_gap, ^malformed}}}
+    refute_received {:codex_app_server_replay_gap, ^malformed}
+  end
+
   test "byte transports preserve malformed JSON and non-object rejection" do
     for {bytes, expected} <- [
           {"{not-json}\n", :malformed},

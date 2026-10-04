@@ -364,14 +364,8 @@ defmodule CodexEx.AppServer.Session do
     {:noreply, %{state | last_transport_sequence: max(state.last_transport_sequence, through_sequence)}}
   end
 
-  defp handle_normalized_message({:replay_gap, payload}, _message, state) when is_map(payload) do
-    send_notification_target(
-      state.notification_target,
-      {:codex_app_server_replay_gap, payload}
-    )
-
-    {:noreply, state}
-  end
+  defp handle_normalized_message({:replay_gap, payload}, _message, state),
+    do: finish_transport_message({:error, {:invalid_replay_gap, payload}, state}, nil)
 
   defp handle_normalized_message({:closed, reason, sequence}, _message, state)
        when is_integer(sequence) and sequence >= 0 and

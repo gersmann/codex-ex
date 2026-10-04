@@ -74,6 +74,7 @@ defmodule CodexEx.AppServer.MockTransport do
   def normalize_message({:mock_message, message}, _handle) when is_map(message), do: {:message, message}
   # Raw bytes are only used by malformed-JSON fault injection.
   def normalize_message({:mock_data, data}, _handle) when is_binary(data), do: {:data, data}
+  def normalize_message({:mock_replay_gap, payload}, _handle) when is_map(payload), do: {:replay_gap, payload}
   def normalize_message({:mock_closed, reason}, _handle), do: {:closed, reason}
   def normalize_message({:mock_closed, reason, sequence}, _handle), do: {:closed, reason, sequence}
   def normalize_message(_message, _handle), do: :ignore
