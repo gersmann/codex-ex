@@ -830,6 +830,11 @@ defmodule CodexEx.AppServer.MockTransport do
     end
   end
 
+  defp handle_method("review/start", id, _params, %{config: %{review_start_error: true}} = state) do
+    emit(state, error(id, -32_600, "review start rejected"))
+    state
+  end
+
   defp handle_method("review/start", id, params, state) do
     thread_id = Map.get(params, "threadId")
     target = Map.get(params, "target", %{})

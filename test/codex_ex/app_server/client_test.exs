@@ -1063,6 +1063,18 @@ defmodule CodexEx.AppServer.ClientTest do
              Thread.refresh(reverted, include_turns: true)
   end
 
+  test "start_review returns the review turn or the review/start error", %{mock: mock} do
+    client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
+    assert {:ok, %Thread{id: thread_id}} = Client.start_thread(client)
+
+    assert {:ok, %Turn{thread_id: ^thread_id}} = Client.start_review(client, thread_id)
+
+    MockTransport.configure(mock, review_start_error: true)
+
+    assert {:error, {:remote_error, %{"message" => "review start rejected"}}} =
+             Client.start_review(client, thread_id, %{"type" => "uncommittedChanges"})
+  end
+
   test "authoritative pagination rejects a repeated cursor without a third request", %{mock: mock} do
     client = start_supervised!({Client, [transport: MockTransport, mock_pid: mock]})
 

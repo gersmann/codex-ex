@@ -83,7 +83,6 @@ defmodule CodexEx.AppServer.Client do
   alias CodexEx.AppServer.ThreadSettings
   alias CodexEx.AppServer.ThreadSnapshot
   alias CodexEx.AppServer.Turn
-  alias CodexEx.AppServer.TurnStream
   alias CodexEx.MapHelpers
 
   require Logger
@@ -217,7 +216,6 @@ defmodule CodexEx.AppServer.Client do
                start_thread: 2,
                start_thread_compaction: 2,
                start_review: 4,
-               start_review: 5,
                resume_thread: 3,
                read_thread: 3,
                list_thread_turns: 3,
@@ -736,27 +734,12 @@ defmodule CodexEx.AppServer.Client do
     )
   end
 
-  @spec start_review(t(), binary(), map(), binary() | nil, boolean()) ::
-          {:ok, TurnStream.t()} | {:error, term()}
-  def start_review(
-        client,
-        thread_id,
-        target \\ %{"type" => "uncommittedChanges"},
-        delivery \\ nil,
-        direct_stream? \\ true
-      )
-      when is_binary(thread_id) and is_map(target) and (is_binary(delivery) or is_nil(delivery)) and
-             is_boolean(direct_stream?) do
+  @doc "Starts a review turn and returns its initial protocol state without collecting its event stream."
+  @spec start_review(t(), binary(), map(), binary() | nil) :: {:ok, Turn.t()} | {:error, term()}
+  def start_review(client, thread_id, target \\ %{"type" => "uncommittedChanges"}, delivery \\ nil)
+      when is_binary(thread_id) and is_map(target) and (is_binary(delivery) or is_nil(delivery)) do
     params = %ReviewStartParams{thread_id: thread_id, target: target, delivery: delivery}
-
-    TurnStream.start_request(
-      client,
-      thread_id,
-      fn ->
-        start_review_request(client, params, @turn_timeout)
-      end,
-      direct_stream?
-    )
+    start_review_request(client, params, @default_timeout)
   end
 
   @spec unarchive_thread(t(), binary()) :: {:ok, Thread.t()} | {:error, term()}
