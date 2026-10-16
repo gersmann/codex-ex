@@ -39,11 +39,17 @@ defmodule CodexEx.AppServer.Transport do
   @callback acknowledge(handle(), sequence :: non_neg_integer()) :: :ok
   @callback acknowledge_replay_gap(handle(), through_sequence :: non_neg_integer()) :: :ok
   @callback session_bootstrap(handle()) :: {handle(), map()}
+  @doc """
+  Ends the remote side for good. `close/1` only detaches, so a remote session
+  survives a node restart; a client released as unused calls this first.
+  """
+  @callback release(handle()) :: :ok
 
   @optional_callbacks remote_transport?: 0,
                       stable_identity: 0,
                       reconcile_thread_activity: 2,
                       acknowledge: 2,
                       acknowledge_replay_gap: 2,
-                      session_bootstrap: 1
+                      session_bootstrap: 1,
+                      release: 1
 end

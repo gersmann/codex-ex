@@ -71,6 +71,12 @@ defmodule CodexEx.AppServer.MockTransport do
   def close(_mock_pid), do: :ok
 
   @impl Transport
+  def release(mock_pid) when is_pid(mock_pid) do
+    GenServer.cast(mock_pid, :released)
+    :ok
+  end
+
+  @impl Transport
   def normalize_message({:mock_message, message}, _handle) when is_map(message), do: {:message, message}
   # Raw bytes are only used by malformed-JSON fault injection.
   def normalize_message({:mock_data, data}, _handle) when is_binary(data), do: {:data, data}
@@ -131,6 +137,11 @@ defmodule CodexEx.AppServer.MockTransport do
   end
 
   @impl GenServer
+  def handle_cast(:released, state) do
+    if notify = Map.get(state.config, :notify), do: Kernel.send(notify, :mock_transport_released)
+    {:noreply, state}
+  end
+
   def handle_cast({:incoming, payload}, state) do
     case payload do
       %{"id" => _id, "method" => _method} = message ->

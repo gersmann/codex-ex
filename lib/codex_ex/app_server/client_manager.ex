@@ -9,6 +9,11 @@ defmodule CodexEx.AppServer.ClientManager do
   registry — not this process — is the source of truth for which clients exist.
   This process only monitors clients to reconcile remote thread activity when one
   dies, and rebuilds its monitors from the registry when it restarts.
+
+  A shared client stops itself once nobody has subscribed to or called it for
+  `:shared_client_idle_ms` (default 10 minutes; `:infinity` keeps clients for
+  good). Without that, every worktree any caller ever touched keeps a client,
+  and on a runner without its managed app-server each one is an OS process.
   """
 
   use GenServer
@@ -16,6 +21,7 @@ defmodule CodexEx.AppServer.ClientManager do
   alias CodexEx.AppServer.Client
 
   @registry CodexEx.ClientRegistry
+  @default_idle_ms 10 * 60 * 1_000
 
   @type client_key ::
           {:client, transport :: term(), runner_id :: term(), url :: term(), executable :: term(), args :: term(),
@@ -69,6 +75,10 @@ defmodule CodexEx.AppServer.ClientManager do
   def handle_cast({:monitor, key, pid}, monitored), do: {:noreply, monitor(monitored, key, pid)}
 
   @impl true
+  # Released for being unused: nothing to reconcile, and reconciling would
+  # reopen the very client that just went idle.
+  def handle_info({:DOWN, _ref, :process, pid, {:shutdown, :idle}}, monitored), do: {:noreply, Map.delete(monitored, pid)}
+
   def handle_info(
         {:DOWN, _ref, :process, pid,
          {:shutdown, {:transport_closed, {:remote_session_closed, "encoded codex session event is " <> _}}}},
@@ -165,6 +175,7 @@ defmodule CodexEx.AppServer.ClientManager do
   defp shared_client_opts(key, opts) do
     opts
     |> Keyword.put_new(:transport, :stdio)
+    |> Keyword.put_new(:idle_shutdown_ms, Application.get_env(:codex_ex, :shared_client_idle_ms, @default_idle_ms))
     |> Keyword.put(:name, {:via, Registry, {@registry, key}})
     |> maybe_put_remote_transport_id(key)
   end

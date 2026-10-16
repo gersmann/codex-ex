@@ -1,6 +1,7 @@
 defmodule CodexEx.AppServer.ClientManagerTest do
   use ExUnit.Case, async: false
 
+  alias CodexEx.AppServer.Client
   alias CodexEx.AppServer.ClientManager
   alias CodexEx.AppServer.MockTransport
 
@@ -74,6 +75,32 @@ defmodule CodexEx.AppServer.ClientManagerTest do
 
     refute implicit_client == explicit_nil_client
     refute implicit_client == explicit_client
+  end
+
+  test "an unused shared client releases its transport and stops", %{mock: mock, opts: opts} do
+    :ok = MockTransport.configure(mock, notify: self())
+    assert {:ok, client} = ClientManager.get_client(Keyword.put(opts, :idle_shutdown_ms, 50))
+    ref = Process.monitor(client)
+
+    assert_receive {:DOWN, ^ref, :process, ^client, {:shutdown, :idle}}, 2_000
+    assert_receive :mock_transport_released
+    # The manager does not reconcile, and a new caller gets a fresh client.
+    assert {:ok, next} = ClientManager.get_client(Keyword.put(opts, :idle_shutdown_ms, 50))
+    on_exit(fn -> stop_if_alive(next) end)
+    refute next == client
+  end
+
+  test "a subscribed client is never released as idle", %{opts: opts} do
+    assert {:ok, client} = ClientManager.get_client(Keyword.put(opts, :idle_shutdown_ms, 50))
+    on_exit(fn -> stop_if_alive(client) end)
+    :ok = Client.subscribe(client)
+
+    Process.sleep(200)
+    assert Process.alive?(client)
+
+    ref = Process.monitor(client)
+    :ok = Client.unsubscribe(client)
+    assert_receive {:DOWN, ^ref, :process, ^client, {:shutdown, :idle}}, 2_000
   end
 
   test "client death repairs only its runner and workspace" do

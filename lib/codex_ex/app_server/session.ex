@@ -410,7 +410,10 @@ defmodule CodexEx.AppServer.Session do
   end
 
   @impl true
-  def terminate(_reason, %{transport: transport, transport_module: transport_module}) do
+  def terminate(reason, %{transport: transport, transport_module: transport_module}) do
+    if reason == {:shutdown, :idle} and function_exported?(transport_module, :release, 1),
+      do: :ok = transport_module.release(transport)
+
     :ok = transport_module.close(transport)
     :ok
   end

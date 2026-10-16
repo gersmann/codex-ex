@@ -192,7 +192,9 @@ defmodule CodexEx.AppServer.Client do
           thread_activity_runner_id: binary() | nil,
           thread_activity_workspace_id: binary() | nil,
           session: Session.t(),
-          subscribers: subscriber_map()
+          subscribers: subscriber_map(),
+          idle_shutdown_ms: pos_integer() | :infinity,
+          last_used_at: integer()
         }
   # The generated protocol modules and deferred GenServer reply path make these
   # exported wrappers appear less precise to Dialyzer than the normalized API.
@@ -836,14 +838,14 @@ defmodule CodexEx.AppServer.Client do
 
     session_opts =
       opts
-      |> Keyword.drop([:name, :initialize_params, :broadcasts_thread_activity?])
+      |> Keyword.drop([:name, :initialize_params, :broadcasts_thread_activity?, :idle_shutdown_ms])
       |> Keyword.put(:notification_target, self())
 
     with {:ok, session} <- Session.start_link(session_opts),
          {:ok, result} <- Session.initialize(session, initialize_params),
          {:ok, %InitializeResponse{}} <- normalize_initialize_result({:ok, result}) do
       {:ok,
-       %{
+       schedule_idle_check(%{
          session: session,
          subscribers: %{},
          model_list_cache: nil,
@@ -853,8 +855,10 @@ defmodule CodexEx.AppServer.Client do
          replay_gap_owners: MapSet.new(),
          broadcasts_thread_activity?: Keyword.get(opts, :broadcasts_thread_activity?, false),
          thread_activity_runner_id: Keyword.get(opts, :runner_id),
-         thread_activity_workspace_id: Keyword.get(opts, :workspace_id)
-       }}
+         thread_activity_workspace_id: Keyword.get(opts, :workspace_id),
+         idle_shutdown_ms: Keyword.get(opts, :idle_shutdown_ms, :infinity),
+         last_used_at: now_ms()
+       })}
     else
       {:error, reason} ->
         {:stop, reason}
@@ -868,17 +872,21 @@ defmodule CodexEx.AppServer.Client do
     {:noreply, state}
   end
 
-  def handle_call(:thread_activity_origin, _from, state) do
+  # Every call counts as use, so an idle-release timer never stops a client
+  # someone is talking to.
+  @impl true
+  def handle_call(message, from, state), do: handle_client_call(message, from, %{state | last_used_at: now_ms()})
+
+  defp handle_client_call(:thread_activity_origin, _from, state) do
     {:reply, {:ok, {self(), state.thread_activity_runner_id, state.thread_activity_workspace_id}}, state}
   end
 
-  @impl true
-  def handle_call(:pending_requests, _from, state) do
+  defp handle_client_call(:pending_requests, _from, state) do
     {:reply, {:ok, Map.values(state.pending_requests)}, state}
   end
 
-  def handle_call({:subscribe, subscriber, thread_id, reconciles_replay_gap?}, _from, state)
-      when (is_binary(thread_id) or is_nil(thread_id) or thread_id == :all) and is_boolean(reconciles_replay_gap?) do
+  defp handle_client_call({:subscribe, subscriber, thread_id, reconciles_replay_gap?}, _from, state)
+       when (is_binary(thread_id) or is_nil(thread_id) or thread_id == :all) and is_boolean(reconciles_replay_gap?) do
     case Map.fetch(state.subscribers, subscriber) do
       {:ok, %{thread_id: ^thread_id, reconciles_replay_gap?: ^reconciles_replay_gap?}} ->
         {:reply, :ok, state}
@@ -919,13 +927,11 @@ defmodule CodexEx.AppServer.Client do
     end
   end
 
-  @impl true
-  def handle_call({:unsubscribe, subscriber}, _from, state) do
+  defp handle_client_call({:unsubscribe, subscriber}, _from, state) do
     {:reply, :ok, remove_subscriber(state, subscriber)}
   end
 
-  @impl true
-  def handle_call({:reply_request, request_id, reply, timeout}, _from, state) do
+  defp handle_client_call({:reply_request, request_id, reply, timeout}, _from, state) do
     case normalize_request_reply(reply) do
       {:ok, normalized_reply} ->
         case Session.respond(state.session, request_id, normalized_reply, timeout) do
@@ -941,8 +947,7 @@ defmodule CodexEx.AppServer.Client do
     end
   end
 
-  @impl true
-  def handle_call({:config_read, %ConfigReadParams{} = params, timeout}, from, state) do
+  defp handle_client_call({:config_read, %ConfigReadParams{} = params, timeout}, from, state) do
     defer_session_request(from, state, "config/read", params, timeout, fn payload ->
       case ConfigReadResponse.decode(payload) do
         %ConfigReadResponse{} = response ->
@@ -954,8 +959,7 @@ defmodule CodexEx.AppServer.Client do
     end)
   end
 
-  @impl true
-  def handle_call({:thread_start, params, settings_seed, timeout}, from, state) do
+  defp handle_client_call({:thread_start, params, settings_seed, timeout}, from, state) do
     client = self()
 
     defer_session_request(from, state, "thread/start", params, timeout, fn result ->
@@ -963,8 +967,7 @@ defmodule CodexEx.AppServer.Client do
     end)
   end
 
-  @impl true
-  def handle_call({:thread_resume, params, settings_seed, timeout}, from, state) do
+  defp handle_client_call({:thread_resume, params, settings_seed, timeout}, from, state) do
     client = self()
 
     :ok =
@@ -979,8 +982,7 @@ defmodule CodexEx.AppServer.Client do
     {:noreply, state}
   end
 
-  @impl true
-  def handle_call({:thread_read, params, history_mode, timeout}, from, state) do
+  defp handle_client_call({:thread_read, params, history_mode, timeout}, from, state) do
     :ok =
       defer_reply(from, state.session, fn session ->
         read_thread_snapshot(session, params, history_mode, timeout)
@@ -989,8 +991,7 @@ defmodule CodexEx.AppServer.Client do
     {:noreply, state}
   end
 
-  @impl true
-  def handle_call({:thread_turns_list, params, timeout}, from, state) do
+  defp handle_client_call({:thread_turns_list, params, timeout}, from, state) do
     :ok =
       defer_reply(from, state.session, fn session ->
         request_thread_turns_page(session, params, timeout)
@@ -999,17 +1000,18 @@ defmodule CodexEx.AppServer.Client do
     {:noreply, state}
   end
 
-  @impl true
-  def handle_call({:model_list, _params, _timeout}, _from, %{model_list_cache: cache} = state) when not is_nil(cache) do
+  defp handle_client_call({:model_list, _params, _timeout}, _from, %{model_list_cache: cache} = state)
+       when not is_nil(cache) do
     {:reply, {:ok, cache}, state}
   end
 
-  def handle_call({:model_list, _params, _timeout}, from, %{model_list_pending: pending} = state) when is_map(pending) do
+  defp handle_client_call({:model_list, _params, _timeout}, from, %{model_list_pending: pending} = state)
+       when is_map(pending) do
     next_pending = Map.update!(pending, :callers, &[from | &1])
     {:noreply, %{state | model_list_pending: next_pending}}
   end
 
-  def handle_call({:model_list, params, timeout}, from, state) do
+  defp handle_client_call({:model_list, params, timeout}, from, state) do
     ref = make_ref()
     client = self()
 
@@ -1022,8 +1024,7 @@ defmodule CodexEx.AppServer.Client do
     end
   end
 
-  @impl true
-  def handle_call({request, params, timeout}, from, state) when is_map_key(@simple_requests, request) do
+  defp handle_client_call({request, params, timeout}, from, state) when is_map_key(@simple_requests, request) do
     {method, response} = Map.fetch!(@simple_requests, request)
 
     defer_session_request(from, state, method, params, timeout, fn payload ->
@@ -1031,8 +1032,7 @@ defmodule CodexEx.AppServer.Client do
     end)
   end
 
-  @impl true
-  def handle_call({:thread_fork, params, settings_seed, timeout}, from, state) do
+  defp handle_client_call({:thread_fork, params, settings_seed, timeout}, from, state) do
     client = self()
     thread_id = ProtocolValue.get(params, :thread_id)
 
@@ -1051,8 +1051,7 @@ defmodule CodexEx.AppServer.Client do
     {:noreply, state}
   end
 
-  @impl true
-  def handle_call({:thread_inject_items, %ThreadInjectItemsParams{} = params, timeout}, from, state) do
+  defp handle_client_call({:thread_inject_items, %ThreadInjectItemsParams{} = params, timeout}, from, state) do
     defer_session_request(from, state, "thread/inject_items", params, timeout, fn payload ->
       case ThreadInjectItemsResponse.decode(payload) do
         %ThreadInjectItemsResponse{} -> :ok
@@ -1061,8 +1060,7 @@ defmodule CodexEx.AppServer.Client do
     end)
   end
 
-  @impl true
-  def handle_call({:thread_unsubscribe, %ThreadUnsubscribeParams{} = params, timeout}, from, state) do
+  defp handle_client_call({:thread_unsubscribe, %ThreadUnsubscribeParams{} = params, timeout}, from, state) do
     defer_session_request(from, state, "thread/unsubscribe", params, timeout, fn payload ->
       case ThreadUnsubscribeResponse.decode(payload) do
         %ThreadUnsubscribeResponse{} = response -> {:ok, response}
@@ -1071,8 +1069,7 @@ defmodule CodexEx.AppServer.Client do
     end)
   end
 
-  @impl true
-  def handle_call({:thread_revert, %ThreadRevertParams{} = params, timeout}, from, state) do
+  defp handle_client_call({:thread_revert, %ThreadRevertParams{} = params, timeout}, from, state) do
     client = self()
 
     :ok =
@@ -1090,8 +1087,7 @@ defmodule CodexEx.AppServer.Client do
     {:noreply, state}
   end
 
-  @impl true
-  def handle_call({:thread_unarchive, params, timeout}, from, state) do
+  defp handle_client_call({:thread_unarchive, params, timeout}, from, state) do
     client = self()
 
     defer_session_request(from, state, "thread/unarchive", params, timeout, fn result ->
@@ -1099,8 +1095,7 @@ defmodule CodexEx.AppServer.Client do
     end)
   end
 
-  @impl true
-  def handle_call({:turn_start_request, params, timeout}, from, state) do
+  defp handle_client_call({:turn_start_request, params, timeout}, from, state) do
     thread_id = ProtocolValue.get(params, :thread_id)
 
     defer_session_request(from, state, "turn/start", params, timeout, fn result ->
@@ -1108,8 +1103,7 @@ defmodule CodexEx.AppServer.Client do
     end)
   end
 
-  @impl true
-  def handle_call({:review_start_request, params, timeout}, from, state) do
+  defp handle_client_call({:review_start_request, params, timeout}, from, state) do
     thread_id = ProtocolValue.get(params, :thread_id)
 
     defer_session_request(from, state, "review/start", params, timeout, fn result ->
@@ -1117,15 +1111,13 @@ defmodule CodexEx.AppServer.Client do
     end)
   end
 
-  @impl true
-  def handle_call({:turn_steer, params, timeout}, from, state) do
+  defp handle_client_call({:turn_steer, params, timeout}, from, state) do
     defer_session_request(from, state, "turn/steer", params, timeout, fn result ->
       normalize_turn_steer_result(result)
     end)
   end
 
-  @impl true
-  def handle_call({:turn_interrupt, params, timeout}, from, state) do
+  defp handle_client_call({:turn_interrupt, params, timeout}, from, state) do
     defer_session_request(from, state, "turn/interrupt", params, timeout, fn result ->
       normalize_turn_interrupt_result(result)
     end)
@@ -1205,13 +1197,42 @@ defmodule CodexEx.AppServer.Client do
   end
 
   @impl true
+  def handle_info(:idle_check, state) do
+    if idle?(state),
+      do: {:stop, {:shutdown, :idle}, state},
+      else: {:noreply, schedule_idle_check(state)}
+  end
+
+  @impl true
   def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
-  def terminate(_reason, %{session: session}) when is_pid(session) do
-    if Process.alive?(session), do: Session.stop(session)
+  def terminate(reason, %{session: session}) when is_pid(session) do
+    # An idle release also ends the remote side; any other stop only detaches.
+    if Process.alive?(session),
+      do: Session.stop(session, if(reason == {:shutdown, :idle}, do: reason, else: :normal))
+
     :ok
   end
+
+  # Idle means nobody is subscribed, nothing is in flight and nobody has called
+  # for the whole window. Turns always run under a subscriber, and a request
+  # without one is bounded by its own timeout, well inside any sane window.
+  defp idle?(%{idle_shutdown_ms: idle_ms} = state) when is_integer(idle_ms) do
+    state.subscribers == %{} and state.pending_requests == %{} and
+      is_nil(state.model_list_pending) and now_ms() - state.last_used_at >= idle_ms
+  end
+
+  defp idle?(_state), do: false
+
+  defp schedule_idle_check(%{idle_shutdown_ms: idle_ms} = state) when is_integer(idle_ms) do
+    Process.send_after(self(), :idle_check, min(idle_ms, 60_000))
+    state
+  end
+
+  defp schedule_idle_check(state), do: state
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
 
   defp session_exit_reason(:normal), do: :normal
   defp session_exit_reason(:shutdown), do: :shutdown
