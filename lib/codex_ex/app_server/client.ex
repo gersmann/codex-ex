@@ -826,11 +826,41 @@ defmodule CodexEx.AppServer.Client do
     |> safe_client_call({:review_start_request, params, timeout}, call_timeout_for(timeout))
   end
 
+  # With `:started_notify`, init returns at once and the transport handshake runs
+  # in `handle_continue/2`, so a supervisor shared by many clients is not held
+  # for one slow app-server; the pid is then sent `{:codex_client_started, client,
+  # :ok | {:error, reason}}`.
   @impl true
-  @spec init(keyword()) :: {:ok, state()} | {:stop, term()}
+  @spec init(keyword()) :: {:ok, state()} | {:ok, nil, {:continue, term()}} | {:stop, term()}
   def init(opts) do
     Process.flag(:trap_exit, true)
 
+    case Keyword.pop(opts, :started_notify) do
+      {nil, opts} ->
+        case start_session(opts) do
+          {:ok, state} -> {:ok, state}
+          {:error, reason} -> {:stop, reason}
+        end
+
+      {starter, opts} when is_pid(starter) ->
+        {:ok, nil, {:continue, {:start_session, starter, opts}}}
+    end
+  end
+
+  @impl true
+  def handle_continue({:start_session, starter, opts}, nil) do
+    case start_session(opts) do
+      {:ok, state} ->
+        send(starter, {:codex_client_started, self(), :ok})
+        {:noreply, state}
+
+      {:error, reason} ->
+        send(starter, {:codex_client_started, self(), {:error, reason}})
+        {:stop, {:shutdown, reason}, nil}
+    end
+  end
+
+  defp start_session(opts) do
     initialize_params =
       opts
       |> Keyword.get(:initialize_params, %{})
@@ -859,9 +889,6 @@ defmodule CodexEx.AppServer.Client do
          idle_shutdown_ms: Keyword.get(opts, :idle_shutdown_ms, :infinity),
          last_used_at: now_ms()
        })}
-    else
-      {:error, reason} ->
-        {:stop, reason}
     end
   end
 
@@ -1214,6 +1241,8 @@ defmodule CodexEx.AppServer.Client do
 
     :ok
   end
+
+  def terminate(_reason, nil), do: :ok
 
   # Idle means nobody is subscribed, nothing is in flight and nobody has called
   # for the whole window. Turns always run under a subscriber, and a request

@@ -104,12 +104,13 @@ defmodule CodexEx.AppServer.ClientManager do
 
   # Concurrent starts for one key race on the registry name: the loser exits before
   # `init`, so no duplicate app-server is spawned, and its caller gets the winner.
+  # The client's handshake runs after `start_child/2` returns (`:started_notify`):
+  # one slow or unresponsive app-server must not hold the shared supervisor and
+  # with it every other client start on the node.
   defp start_client(key, opts) do
     case DynamicSupervisor.start_child(CodexEx.ClientSupervisor, shared_client_child_spec(key, opts)) do
       {:ok, pid} ->
-        # A cast dropped while this process restarts is covered by `init/1`'s registry scan.
-        GenServer.cast(__MODULE__, {:monitor, key, pid})
-        {:ok, pid}
+        await_started(key, pid)
 
       {:error, {:already_started, pid}} ->
         {:ok, pid}
@@ -119,6 +120,24 @@ defmodule CodexEx.AppServer.ClientManager do
 
       other ->
         {:error, {:shared_client_start_failed, other}}
+    end
+  end
+
+  defp await_started(key, pid) do
+    ref = Process.monitor(pid)
+
+    receive do
+      {:codex_client_started, ^pid, result} ->
+        Process.demonitor(ref, [:flush])
+
+        with :ok <- result do
+          # A cast dropped while this process restarts is covered by `init/1`'s registry scan.
+          GenServer.cast(__MODULE__, {:monitor, key, pid})
+          {:ok, pid}
+        end
+
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        {:error, reason}
     end
   end
 
@@ -177,6 +196,7 @@ defmodule CodexEx.AppServer.ClientManager do
     |> Keyword.put_new(:transport, :stdio)
     |> Keyword.put_new(:idle_shutdown_ms, Application.get_env(:codex_ex, :shared_client_idle_ms, @default_idle_ms))
     |> Keyword.put(:name, {:via, Registry, {@registry, key}})
+    |> Keyword.put(:started_notify, self())
     |> maybe_put_remote_transport_id(key)
   end
 
